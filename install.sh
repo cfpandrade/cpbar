@@ -21,8 +21,8 @@ echo "✅ Script installed to $INSTALL_DIR/$SCRIPT_NAME"
 ALIAS_BLOCK='
 # cprm aliases - Enhanced cp/rm with progress bars
 # Original commands (use these to bypass progress bars)
-alias cpo="/bin/cp"
-alias rmo="/bin/rm"
+alias cpo="cp"
+alias rmo="rm"
 # Replace cp/rm with enhanced versions
 alias cp="cprm cp"
 alias rm="cprm rm"
