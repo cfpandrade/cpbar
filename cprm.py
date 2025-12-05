@@ -64,6 +64,10 @@ class ProgressBar:
         self.overwrite_all = False  # Track if user chose "overwrite all"
         self.skipped_items = 0
 
+        # Time estimation
+        self.start_time = time.time()
+        self.last_update_time = self.start_time
+
         # Handle Ctrl+C gracefully
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGWINCH, self._resize_handler)
@@ -180,6 +184,26 @@ class ProgressBar:
                 return f"{size:.1f}{unit}"
             size /= 1024
         return f"{size:.1f}PB"
+
+    def _format_time(self, seconds: float) -> str:
+        """Format seconds to human-readable time."""
+        if seconds < 0:
+            return "calculating..."
+        elif seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            mins = int(seconds / 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds / 3600)
+            mins = int((seconds % 3600) / 60)
+            return f"{hours}h {mins}m"
+
+    def _get_elapsed_time(self) -> str:
+        """Get elapsed time since operation started."""
+        elapsed = time.time() - self.start_time
+        return self._format_time(elapsed)
     
     def _calculate_bar_width(self, other_content_len: int) -> int:
         """Calculate available width for the progress bar.
@@ -194,26 +218,31 @@ class ProgressBar:
     def update(self, current_file: str, bytes_delta: int = 0):
         """Update progress bar with current state."""
         self._setup()
-        
+
         self.current_file = current_file
         self.completed_bytes += bytes_delta
-        
+        self.last_update_time = time.time()
+
         cols, rows = self._get_terminal_size()
-        
+
         # Calculate progress
         if self.total_bytes > 0:
             progress = min(self.completed_bytes / self.total_bytes, 1.0)
         else:
             progress = self.completed_items / self.total_items if self.total_items > 0 else 1.0
-        
+
         # Build components
         op_icon = "📋" if self.operation == "cp" else "🗑️ "
         pct = f"{progress * 100:5.1f}%"
         items_str = f"{self.completed_items}/{self.total_items}"
         size_str = f"{self._format_size(self.completed_bytes)}/{self._format_size(self.total_bytes)}"
-        
+
+        # Show elapsed time
+        elapsed_str = self._get_elapsed_time()
+        time_display = f"{elapsed_str}"
+
         # Truncate filename to reasonable length and pad to fixed width
-        max_filename_len = 25
+        max_filename_len = 20  # Reduced to make room for time
         display_name = current_file
         if len(display_name) > max_filename_len:
             display_name = "..." + display_name[-(max_filename_len-3):]
@@ -221,21 +250,20 @@ class ProgressBar:
             # Pad with spaces to maintain constant width
             display_name = display_name.ljust(max_filename_len)
 
-        # Calculate fixed content length (icon + pct + items + size + filename + separators)
-        # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | filename"
-        # Use max_filename_len instead of len(display_name) to keep bar width constant
-        fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + max_filename_len
-        
+        # Calculate fixed content length (icon + pct + items + size + filename + time + separators)
+        # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | 5m 23s | filename"
+        fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + len(time_display) + 3 + max_filename_len
+
         # Calculate bar width to fill remaining space
         bar_width = self._calculate_bar_width(fixed_len)
-        
+
         filled = int(bar_width * progress)
         empty = bar_width - filled
         bar = f"{Colors.GREEN}{'█' * filled}{Colors.DIM}{'░' * empty}{Colors.RESET}"
-        
+
         # Build the line
-        line = f"{op_icon} {Colors.BOLD}{pct}{Colors.RESET} [{bar}] {items_str} | {size_str} | {Colors.CYAN}{display_name}{Colors.RESET}"
-        
+        line = f"{op_icon} {Colors.BOLD}{pct}{Colors.RESET} [{bar}] {items_str} | {size_str} | {Colors.DIM}{time_display}{Colors.RESET} | {Colors.CYAN}{display_name}{Colors.RESET}"
+
         # Move to bottom, clear line, print
         sys.stdout.write(Cursor.move_to_bottom())
         sys.stdout.write("\033[2K")  # Clear entire line
@@ -376,33 +404,51 @@ def copy_directory_with_progress(src: str, dst: str, progress: ProgressBar):
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
 
 
-def do_copy(sources: List[str], destination: str, recursive: bool):
+def estimate_copy_time(total_bytes: int) -> str:
+    """Estimate time to copy based on average disk speed.
+    Assumes ~100 MB/s for typical SSD operations.
+    """
+    if total_bytes == 0:
+        return "< 1s"
+
+    # Conservative estimate: 80 MB/s (to account for overhead)
+    MB_PER_SECOND = 80
+    bytes_per_second = MB_PER_SECOND * 1024 * 1024
+    estimated_seconds = total_bytes / bytes_per_second
+
+    # Use the same formatter
+    pb = ProgressBar(0, 0, 'cp')
+    return pb._format_time(estimated_seconds)
+
+
+def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool = False):
     """Execute copy operation with progress bar."""
     # Validate inputs
     if not sources:
         print(f"{Colors.RED}Error: No source files specified{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
-    
+
     dst_path = Path(destination)
-    
+
     # If multiple sources, destination must be a directory
     if len(sources) > 1 and not dst_path.is_dir():
         if not dst_path.exists():
-            dst_path.mkdir(parents=True)
+            if not dry_run:
+                dst_path.mkdir(parents=True)
         else:
             print(f"{Colors.RED}Error: Destination must be a directory for multiple sources{Colors.RESET}", file=sys.stderr)
             sys.exit(1)
-    
+
     # Collect all files to copy
     all_files = []
     dirs_to_copy = []
-    
+
     for src in sources:
         src_path = Path(src)
         if not src_path.exists():
             print(f"{Colors.RED}Error: '{src}' does not exist{Colors.RESET}", file=sys.stderr)
             continue
-        
+
         if src_path.is_file():
             all_files.append((str(src_path), src_path.stat().st_size))
         elif src_path.is_dir():
@@ -418,22 +464,46 @@ def do_copy(sources: List[str], destination: str, recursive: bool):
                             all_files.append((filepath, 0))
             else:
                 print(f"{Colors.RED}Error: '{src}' is a directory. Use -r to copy recursively{Colors.RESET}", file=sys.stderr)
-    
+
     if not all_files and not dirs_to_copy:
         print(f"{Colors.RED}Error: No files to copy{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
-    
+
     total_bytes = sum(size for _, size in all_files)
     total_items = len(all_files)
-    
+
+    # Dry-run mode: just show what would be copied
+    if dry_run:
+        pb = ProgressBar(0, 0, 'cp')
+        size_str = pb._format_size(total_bytes)
+        estimated_time = estimate_copy_time(total_bytes)
+
+        print(f"{Colors.CYAN}🔍 Dry-run mode - No files will be copied{Colors.RESET}\n")
+        print(f"{Colors.BOLD}Summary:{Colors.RESET}")
+        print(f"  Files to copy: {Colors.GREEN}{total_items}{Colors.RESET}")
+        print(f"  Total size: {Colors.GREEN}{size_str}{Colors.RESET}")
+        print(f"  Estimated time: {Colors.YELLOW}~{estimated_time}{Colors.RESET}")
+        print(f"  Destination: {Colors.BLUE}{destination}{Colors.RESET}\n")
+
+        # Show first 10 files as preview
+        print(f"{Colors.BOLD}Files (showing first 10):{Colors.RESET}")
+        for filepath, size in all_files[:10]:
+            rel_path = os.path.relpath(filepath)
+            print(f"  {Colors.DIM}→{Colors.RESET} {rel_path} {Colors.DIM}({pb._format_size(size)}){Colors.RESET}")
+
+        if len(all_files) > 10:
+            print(f"  {Colors.DIM}... and {len(all_files) - 10} more files{Colors.RESET}")
+
+        return
+
     print(f"{Colors.BLUE}Copying {total_items} files ({ProgressBar(0, 0, 'cp')._format_size(total_bytes)})...{Colors.RESET}")
-    
+
     progress = ProgressBar(total_items, total_bytes, "cp")
-    
+
     # Copy directories
     for src_dir in dirs_to_copy:
         copy_directory_with_progress(src_dir, destination, progress)
-    
+
     # Copy individual files
     for src_file, _ in all_files:
         if not any(src_file.startswith(d) for d in dirs_to_copy):
@@ -442,56 +512,102 @@ def do_copy(sources: List[str], destination: str, recursive: bool):
                     progress.complete_item()
             except (PermissionError, OSError) as e:
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
-    
+
     progress.finish()
 
 
-def do_remove(targets: List[str], recursive: bool, force: bool):
+def estimate_delete_time(total_bytes: int) -> str:
+    """Estimate time to delete files based on filesystem operations.
+    Deletion is typically faster than copying, but depends on filesystem.
+    """
+    if total_bytes == 0:
+        return "< 1s"
+
+    # Conservative estimate: ~200 MB/s for deletions on SSD
+    MB_PER_SECOND = 200
+    bytes_per_second = MB_PER_SECOND * 1024 * 1024
+    estimated_seconds = total_bytes / bytes_per_second
+
+    # Use the same formatter
+    pb = ProgressBar(0, 0, 'rm')
+    return pb._format_time(estimated_seconds)
+
+
+def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = False):
     """Execute remove operation with progress bar."""
     if not targets:
         print(f"{Colors.RED}Error: No files specified for deletion{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
-    
+
     # Collect all files to remove
     all_files = get_all_files(targets, recursive)
     dirs_to_remove = []
-    
+
     # Also collect directories if recursive
     if recursive:
         for target in targets:
             p = Path(target)
             if p.is_dir():
                 dirs_to_remove.append(str(p))
-    
+
     if not all_files and not dirs_to_remove:
         print(f"{Colors.RED}Error: No files to delete{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
-    
+
     total_bytes = sum(size for _, size in all_files)
     total_items = len(all_files)
-    
+
+    # Dry-run mode: just show what would be deleted
+    if dry_run:
+        pb = ProgressBar(0, 0, 'rm')
+        size_str = pb._format_size(total_bytes)
+        estimated_time = estimate_delete_time(total_bytes)
+
+        print(f"{Colors.CYAN}🔍 Dry-run mode - No files will be deleted{Colors.RESET}\n")
+        print(f"{Colors.BOLD}Summary:{Colors.RESET}")
+        print(f"  Files to delete: {Colors.RED}{total_items}{Colors.RESET}")
+        print(f"  Total size: {Colors.RED}{size_str}{Colors.RESET}")
+        print(f"  Estimated time: {Colors.YELLOW}~{estimated_time}{Colors.RESET}\n")
+
+        # Show first 10 files as preview
+        print(f"{Colors.BOLD}Files (showing first 10):{Colors.RESET}")
+        for filepath, size in all_files[:10]:
+            rel_path = os.path.relpath(filepath)
+            print(f"  {Colors.DIM}→{Colors.RESET} {rel_path} {Colors.DIM}({pb._format_size(size)}){Colors.RESET}")
+
+        if len(all_files) > 10:
+            print(f"  {Colors.DIM}... and {len(all_files) - 10} more files{Colors.RESET}")
+
+        if dirs_to_remove:
+            print(f"\n{Colors.BOLD}Directories:{Colors.RESET}")
+            for dir_path in dirs_to_remove:
+                rel_path = os.path.relpath(dir_path)
+                print(f"  {Colors.DIM}→{Colors.RESET} {rel_path}/")
+
+        return
+
     # Confirmation prompt with countdown (unless force)
     if not force:
         print(f"{Colors.YELLOW}Will delete {total_items} files ({ProgressBar(0, 0, 'rm')._format_size(total_bytes)}){Colors.RESET}")
-        
+
         # 3-second countdown before allowing confirmation
         for i in range(3, 0, -1):
             sys.stdout.write(f"\r{Colors.DIM}Wait {i}s before confirming...{Colors.RESET}  ")
             sys.stdout.flush()
             time.sleep(1)
-        
+
         sys.stdout.write("\r" + " " * 40 + "\r")  # Clear countdown line
         sys.stdout.flush()
-        
+
         confirm = input(f"{Colors.BOLD}Continue? [y/N]: {Colors.RESET}").strip().lower()
         if confirm not in ['y', 'yes']:
             print(f"{Colors.DIM}Operation cancelled{Colors.RESET}")
             sys.exit(0)
-    
+
     print(f"{Colors.BLUE}Deleting {total_items} files...{Colors.RESET}")
-    
+
     progress = ProgressBar(total_items, total_bytes, "rm")
-    
+
     # Remove files first
     for filepath, size in all_files:
         try:
@@ -500,7 +616,7 @@ def do_remove(targets: List[str], recursive: bool, force: bool):
             progress.complete_item()
         except (PermissionError, OSError) as e:
             print(f"\n{Colors.YELLOW}Warning: Could not delete '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
-    
+
     # Remove directories (in reverse order to handle nested dirs)
     if recursive:
         for target in targets:
@@ -510,7 +626,7 @@ def do_remove(targets: List[str], recursive: bool, force: bool):
                     shutil.rmtree(target)
                 except (PermissionError, OSError) as e:
                     print(f"\n{Colors.YELLOW}Warning: Could not delete directory '{target}': {e}{Colors.RESET}", file=sys.stderr)
-    
+
     progress.finish()
 
 
@@ -533,8 +649,10 @@ Examples:
     
     # Copy subcommand
     cp_parser = subparsers.add_parser('cp', help='Copy files')
-    cp_parser.add_argument('-r', '-R', '--recursive', action='store_true', 
+    cp_parser.add_argument('-r', '-R', '--recursive', action='store_true',
                           help='Copy directories recursively')
+    cp_parser.add_argument('-n', '--dry-run', action='store_true',
+                          help='Show what would be copied without actually copying')
     cp_parser.add_argument('sources', nargs='+', help='Source files/directories')
     cp_parser.add_argument('destination', help='Destination')
     
@@ -544,6 +662,8 @@ Examples:
                           help='Remove directories recursively')
     rm_parser.add_argument('-f', '--force', action='store_true',
                           help='Do not ask for confirmation')
+    rm_parser.add_argument('-n', '--dry-run', action='store_true',
+                          help='Show what would be deleted without actually deleting')
     rm_parser.add_argument('targets', nargs='+', help='Files/directories to remove')
     
     args = parser.parse_args()
@@ -557,10 +677,10 @@ Examples:
         if len(args.sources) < 1:
             print(f"{Colors.RED}Error: At least one source file and a destination required{Colors.RESET}", file=sys.stderr)
             sys.exit(1)
-        do_copy(args.sources, args.destination, args.recursive)
-    
+        do_copy(args.sources, args.destination, args.recursive, args.dry_run)
+
     elif args.command == 'rm':
-        do_remove(args.targets, args.recursive, args.force)
+        do_remove(args.targets, args.recursive, args.force, args.dry_run)
 
 
 if __name__ == '__main__':
