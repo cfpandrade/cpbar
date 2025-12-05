@@ -9,6 +9,10 @@
 - **Time Tracking**: Real-time elapsed time display during operations.
 - **Dry-Run Mode**: Preview what will be copied or deleted with time estimates before executing.
 - **Recursive Support**: Fully supports recursive copy (`cp -r`) and remove (`rm -r`).
+- **Dry-Run Mode** (`-n` / `--dry-run`):
+  - Preview exactly what will happen before executing
+  - Shows: file count, total size, estimated time, and first 10 files to be processed
+  - Perfect for verifying complex operations before committing
 - **Smart Overwrite Handling**:
   - Prompts when destination files exist with options: yes (y), no (n), all (a), quit (q).
   - All prompts appear in the same line for a clean interface.
@@ -75,6 +79,41 @@ rm -rf temp_folder/
 rm -n -r old_folder/
 ```
 
+### Dry-Run Mode: Preview Before Executing
+
+Before performing potentially risky operations, use the dry-run flag to see exactly what will happen:
+
+```bash
+# Preview what will be copied
+cp -n large_folder/ /backup/
+
+# Preview what will be deleted
+rm -n --dry-run old_folder/
+```
+
+**Dry-run output includes:**
+- Total number of files to process
+- Total size that will be affected
+- Estimated time for the operation (80 MB/s for copy, 200 MB/s for delete)
+- Preview of the first 10 files
+
+Example output:
+```
+🔍 Dry-run mode - No files will be copied
+
+Summary:
+  Files to copy: 42
+  Total size: 2.5GB
+  Estimated time: ~31s
+  Destination: /backup/
+
+Files (showing first 10):
+  → photos/vacation_2024/IMG_001.jpg (4.2MB)
+  → photos/vacation_2024/IMG_002.jpg (3.8MB)
+  → documents/report.pdf (1.2MB)
+  ... and 39 more files
+```
+
 ### Handling File Overwrites
 
 When copying files that already exist at the destination, `cprm` will prompt you for each file:
@@ -128,3 +167,5 @@ rmo file.txt
 ## How it Works
 
 `cprm` calculates the total size of all source files before starting the operation to provide an accurate progress bar. It handles both file-to-file and directory-to-directory operations, preserving metadata where possible.
+
+In dry-run mode, it scans all files without performing any operations, providing a detailed preview including estimated time based on typical disk speeds (80 MB/s for copy, 200 MB/s for delete).
