@@ -5,7 +5,9 @@
 ## Features
 
 - **Unified Progress Bar**: Tracks total progress across all files and directories.
-- **Visual Feedback**: Shows operation type (📋/🗑️), percentage, progress bar, item count, total size, and current filename.
+- **Visual Feedback**: Shows operation type (📋/🗑️), percentage, progress bar, item count, total size, elapsed time, and current filename.
+- **Time Tracking**: Real-time elapsed time display during operations.
+- **Dry-Run Mode**: Preview what will be copied or deleted with time estimates before executing.
 - **Recursive Support**: Fully supports recursive copy (`cp -r`) and remove (`rm -r`).
 - **Smart Overwrite Handling**:
   - Prompts when destination files exist with options: yes (y), no (n), all (a), quit (q).
@@ -52,6 +54,9 @@ cp -r Photos/ /mnt/backup/Photos/
 
 # Copy multiple files
 cp *.jpg /mnt/backup/images/
+
+# Dry-run: preview what would be copied
+cp -n -r Photos/ /mnt/backup/
 ```
 
 ### Removing Files
@@ -65,6 +70,9 @@ rm -r old_folder/
 
 # Force remove (no confirmation)
 rm -rf temp_folder/
+
+# Dry-run: preview what would be deleted
+rm -n -r old_folder/
 ```
 
 ### Handling File Overwrites
@@ -82,6 +90,26 @@ Options:
 - **q** (quit) - Cancel the entire operation
 
 All prompts appear on the same line for a clean, organized interface.
+
+### Dry-Run Mode
+
+Preview operations before executing them with the `-n` or `--dry-run` flag:
+
+```bash
+# See what would be copied without actually copying
+cp -n file.txt /destination/
+cp -n -r large_folder/ /backup/
+
+# See what would be deleted without actually deleting
+rm -n file.txt
+rm -n -r temp_files/
+```
+
+The dry-run mode shows:
+- Number of files that would be affected
+- Total size of the operation
+- Estimated time to complete
+- Preview of files (first 10)
 
 ### Using Original Commands
 
