@@ -19,6 +19,8 @@ from typing import List, Tuple
 import signal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import json
+import tempfile
 
 # ANSI escape codes for styling
 class Colors:
@@ -47,6 +49,31 @@ class Cursor:
         """Move cursor to last line of terminal."""
         rows = shutil.get_terminal_size().lines
         return f"\033[{rows};1H"
+
+
+# Configuration file management
+CONFIG_FILE = Path.home() / ".config" / "cprm" / "config.json"
+
+def load_config() -> dict:
+    """Load configuration from config file."""
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+def save_config(config: dict):
+    """Save configuration to config file."""
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+
+def get_optimal_workers() -> int:
+    """Get optimal number of workers from config, or return default."""
+    config = load_config()
+    return config.get('optimal_parallel_workers', 4)
 
 
 class ProgressBar:
@@ -230,7 +257,7 @@ class ProgressBar:
         # Calculate remaining space for bar (subtract other content + brackets + padding)
         available = cols - other_content_len - 5
         # Minimum bar width of 10, no maximum - use all available space
-        return max(10, available)
+        return int(max(10, available))
     
     def update(self, current_file: str, bytes_delta: int = 0):
         """Update progress bar with current state."""
@@ -470,6 +497,11 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
         blocks.append((offset, current_block_size, block_num))
         offset += current_block_size
         block_num += 1
+
+    # Show parallel mode info
+    pb = ProgressBar(0, 0, 'cp')
+    block_size_str = pb._format_size(block_size)
+    print(f"{Colors.CYAN}⚡ Parallel mode: {num_workers} workers, {len(blocks)} blocks of {block_size_str}{Colors.RESET}")
 
     # Copy blocks in parallel
     write_lock = threading.Lock()
@@ -759,6 +791,133 @@ def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = 
     progress.finish()
 
 
+def run_benchmark(quiet: bool = False):
+    """Run benchmark to determine optimal number of parallel workers.
+
+    Args:
+        quiet: If True, minimal output. If False, detailed output.
+    """
+    if not quiet:
+        print(f"{Colors.BOLD}🔬 Running benchmark to determine optimal parallel workers...{Colors.RESET}\n")
+
+    # Create a temporary test file (100MB)
+    test_size = 100 * 1024 * 1024  # 100MB
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        test_file = tmpdir_path / "benchmark_test.bin"
+
+        if not quiet:
+            print(f"{Colors.CYAN}Creating 100MB test file...{Colors.RESET}")
+
+        # Create test file with random data
+        with open(test_file, 'wb') as f:
+            # Write in 16MB chunks
+            chunk_size = 16 * 1024 * 1024
+            remaining = test_size
+            while remaining > 0:
+                size = min(chunk_size, remaining)
+                f.write(os.urandom(size))
+                remaining -= size
+
+        # Test different worker counts
+        worker_counts = [1, 2, 4, 6, 8]
+        results = {}
+
+        if not quiet:
+            print(f"\n{Colors.BOLD}Testing different worker counts:{Colors.RESET}")
+
+        for workers in worker_counts:
+            dest_file = tmpdir_path / f"test_copy_{workers}.bin"
+
+            # Run 3 trials and take the average
+            times = []
+            for _ in range(3):
+                if dest_file.exists():
+                    dest_file.unlink()
+
+                start = time.time()
+
+                # Suppress output during benchmark
+                if workers == 1:
+                    # Use normal copy for baseline
+                    shutil.copy2(test_file, dest_file)
+                else:
+                    # Use parallel copy (we need to bypass the progress bar for accurate timing)
+                    src_stat = test_file.stat()
+                    with open(dest_file, 'wb') as fdst:
+                        fdst.seek(src_stat.st_size - 1)
+                        fdst.write(b'\0')
+
+                    block_size = 32 * 1024 * 1024  # 32MB blocks
+                    blocks = []
+                    offset = 0
+                    block_num = 0
+                    file_size = src_stat.st_size
+
+                    while offset < file_size:
+                        current_block_size = min(block_size, file_size - offset)
+                        blocks.append((offset, current_block_size, block_num))
+                        offset += current_block_size
+                        block_num += 1
+
+                    # Copy blocks in parallel (without progress tracking)
+                    write_lock = threading.Lock()
+                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                        futures = []
+                        for offset, size, _ in blocks:
+                            future = executor.submit(
+                                _benchmark_copy_block,
+                                str(test_file), str(dest_file), offset, size, write_lock
+                            )
+                            futures.append(future)
+
+                        for future in as_completed(futures):
+                            future.result()
+
+                    shutil.copystat(test_file, dest_file)
+
+                elapsed = time.time() - start
+                times.append(elapsed)
+
+            avg_time = sum(times) / len(times)
+            results[workers] = avg_time
+
+            if not quiet:
+                speed_mbps = (test_size / (1024 * 1024)) / avg_time
+                print(f"  {workers:2d} workers: {avg_time:.3f}s  ({speed_mbps:.1f} MB/s)")
+
+        # Find optimal worker count (worker count with minimum time)
+        optimal_workers = min(results.keys(), key=lambda k: results[k])
+
+        # Save to config
+        config = load_config()
+        config['optimal_parallel_workers'] = optimal_workers
+        config['benchmark_date'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        config['benchmark_results'] = {str(k): f"{v:.3f}s" for k, v in results.items()}
+        save_config(config)
+
+        if not quiet:
+            print(f"\n{Colors.GREEN}✓ Optimal configuration: {optimal_workers} workers{Colors.RESET}")
+            print(f"{Colors.DIM}Configuration saved to: {CONFIG_FILE}{Colors.RESET}\n")
+        else:
+            print(f"{Colors.GREEN}✓ Optimal: {optimal_workers} workers (saved to config){Colors.RESET}")
+
+    return optimal_workers
+
+
+def _benchmark_copy_block(src: str, dst: str, offset: int, size: int, lock: threading.Lock):
+    """Copy a block for benchmarking (without progress tracking)."""
+    with open(src, 'rb') as fsrc:
+        fsrc.seek(offset)
+        data = fsrc.read(size)
+
+        with lock:
+            with open(dst, 'r+b') as fdst:
+                fdst.seek(offset)
+                fdst.write(data)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Enhanced cp/rm with unified progress bar",
@@ -779,25 +938,78 @@ Examples:
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
     
     # Copy subcommand
-    cp_parser = subparsers.add_parser('cp', help='Copy files')
+    cp_parser = subparsers.add_parser('cp', help='Copy files with progress bar',
+                                     description='Copy files and directories with a unified progress bar, speed tracking, and optional parallel mode for large files.',
+                                     epilog="""
+Examples:
+  cp file.txt /destination/              # Copy single file
+  cp -r folder/ /destination/            # Copy directory recursively
+  cp -n large_folder/ /backup/           # Dry-run: preview before copying
+  cp --parallel=4 large.iso /backup/     # Fast parallel copy (4 workers)
+  cp --parallel=8 *.mkv /backup/         # Parallel copy multiple large files (8 workers)
+
+Performance tips:
+  • Use --parallel for files > 64MB on SSDs (2-4x faster)
+  • Optimal workers: 4-8 for most systems
+  • Shows real-time speed (MB/s) during transfer
+  • 16MB buffer for efficient operations
+                                     """,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     cp_parser.add_argument('-r', '-R', '--recursive', action='store_true',
-                          help='Copy directories recursively')
+                          help='copy directories recursively')
     cp_parser.add_argument('-n', '--dry-run', action='store_true',
-                          help='Show what would be copied without actually copying')
-    cp_parser.add_argument('-P', '--parallel', type=int, nargs='?', const=4, default=0, metavar='WORKERS',
-                          help='Use parallel mode for large files (default: 4 workers if no number specified)')
-    cp_parser.add_argument('sources', nargs='+', help='Source files/directories')
-    cp_parser.add_argument('destination', help='Destination')
-    
+                          help='preview what would be copied without actually copying (shows file count, size, and estimated time)')
+
+    # Get optimal workers from config for help text
+    optimal = get_optimal_workers()
+    cp_parser.add_argument('-P', '--parallel', type=int, nargs='?', const=optimal, default=0, metavar='WORKERS',
+                          help=f'use parallel mode for large files (default: {optimal} workers from benchmark). Optimal: 4-8 for SSDs. Activates automatically for files > 64MB. Run "cprm benchmark" to detect optimal value.')
+    cp_parser.add_argument('sources', nargs='+', help='source files or directories to copy')
+    cp_parser.add_argument('destination', help='destination path')
+
+    # Benchmark subcommand
+    benchmark_parser = subparsers.add_parser('benchmark', help='Run benchmark to detect optimal parallel workers',
+                                            description='Tests different worker counts to determine the optimal configuration for your system.',
+                                            epilog="""
+Examples:
+  cprm benchmark              # Run full benchmark with detailed output
+  cprm benchmark --quiet      # Run benchmark with minimal output
+
+The benchmark will:
+  • Create a temporary 100MB test file
+  • Test with 1, 2, 4, 6, and 8 workers
+  • Run 3 trials for each configuration
+  • Save the optimal setting to ~/.config/cprm/config.json
+  • This setting becomes the default when using -P flag
+                                            """,
+                                            formatter_class=argparse.RawDescriptionHelpFormatter)
+    benchmark_parser.add_argument('-q', '--quiet', action='store_true',
+                                 help='minimal output, only show final result')
+
     # Remove subcommand
-    rm_parser = subparsers.add_parser('rm', help='Remove files')
+    rm_parser = subparsers.add_parser('rm', help='Remove files with progress bar',
+                                     description='Remove files and directories with a unified progress bar, speed tracking, and safety confirmations.',
+                                     epilog="""
+Examples:
+  rm file.txt                    # Remove file (asks for confirmation with 3s countdown)
+  rm -r folder/                  # Remove directory recursively
+  rm -rf temp/                   # Force remove without confirmation
+  rm -n old_files/               # Dry-run: preview what would be deleted
+
+Safety features:
+  • 3-second countdown before confirmation prompt
+  • Shows total files and size before deletion
+  • Dry-run mode to preview operations
+  • Force mode (-f) to skip confirmation
+                                     """,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     rm_parser.add_argument('-r', '-R', '--recursive', action='store_true',
-                          help='Remove directories recursively')
+                          help='remove directories and their contents recursively')
     rm_parser.add_argument('-f', '--force', action='store_true',
-                          help='Do not ask for confirmation')
+                          help='force removal without confirmation (skips 3s countdown)')
     rm_parser.add_argument('-n', '--dry-run', action='store_true',
-                          help='Show what would be deleted without actually deleting')
-    rm_parser.add_argument('targets', nargs='+', help='Files/directories to remove')
+                          help='preview what would be deleted without actually deleting (shows file count, size, and estimated time)')
+    rm_parser.add_argument('targets', nargs='+', help='files or directories to remove')
     
     args = parser.parse_args()
     
@@ -814,6 +1026,9 @@ Examples:
 
     elif args.command == 'rm':
         do_remove(args.targets, args.recursive, args.force, args.dry_run)
+
+    elif args.command == 'benchmark':
+        run_benchmark(quiet=args.quiet)
 
 
 if __name__ == '__main__':
