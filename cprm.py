@@ -334,6 +334,23 @@ class ProgressBar:
     
     def finish(self):
         """Finish progress bar and print summary."""
+        # Save observed speed for adaptive learning
+        if self.total_bytes > 0 and self.completed_bytes > 0:
+            elapsed = time.time() - self.start_time
+            # Only record if operation took more than 0.1 second for accuracy
+            if elapsed > 0.1:
+                speed_mbps = (self.completed_bytes / (1024 * 1024)) / elapsed
+
+                # Save to config for future estimates
+                config = load_config()
+                key = 'copy_speeds_mbps' if self.operation == 'cp' else 'delete_speeds_mbps'
+                speeds = config.get(key, [])
+                speeds.append(speed_mbps)
+                # Keep only last 10 observations to prevent unbounded growth
+                speeds = speeds[-10:]
+                config[key] = speeds
+                save_config(config)
+
         cols, rows = self._get_terminal_size()
 
         # Clear the progress bar line
@@ -553,15 +570,24 @@ def copy_directory_with_progress(src: str, dst: str, progress: ProgressBar):
 
 
 def estimate_copy_time(total_bytes: int) -> str:
-    """Estimate time to copy based on average disk speed.
-    Assumes ~100 MB/s for typical SSD operations.
+    """Estimate time to copy based on learned speeds from past operations.
+    Falls back to conservative defaults if no history exists.
     """
     if total_bytes == 0:
         return "< 1s"
 
-    # Conservative estimate: 80 MB/s (to account for overhead)
-    MB_PER_SECOND = 80
-    bytes_per_second = MB_PER_SECOND * 1024 * 1024
+    # Try to use learned speed from past operations
+    config = load_config()
+    learned_speeds = config.get('copy_speeds_mbps', [])
+
+    if learned_speeds:
+        # Use average of last observed speeds
+        avg_speed_mbps = sum(learned_speeds) / len(learned_speeds)
+    else:
+        # Conservative default for first-time use (works for HDDs too)
+        avg_speed_mbps = 100
+
+    bytes_per_second = avg_speed_mbps * 1024 * 1024
     estimated_seconds = total_bytes / bytes_per_second
 
     # Use the same formatter
@@ -678,15 +704,25 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
 
 
 def estimate_delete_time(total_bytes: int) -> str:
-    """Estimate time to delete files based on filesystem operations.
-    Deletion is typically faster than copying, but depends on filesystem.
+    """Estimate time to delete based on learned speeds from past operations.
+    Falls back to conservative defaults if no history exists.
     """
     if total_bytes == 0:
         return "< 1s"
 
-    # Conservative estimate: ~200 MB/s for deletions on SSD
-    MB_PER_SECOND = 200
-    bytes_per_second = MB_PER_SECOND * 1024 * 1024
+    # Try to use learned speed from past operations
+    config = load_config()
+    learned_speeds = config.get('delete_speeds_mbps', [])
+
+    if learned_speeds:
+        # Use average of last observed speeds
+        avg_speed_mbps = sum(learned_speeds) / len(learned_speeds)
+    else:
+        # Conservative default for first-time use
+        # Deletions are faster than copies (200 MB/s is safe for most systems)
+        avg_speed_mbps = 200
+
+    bytes_per_second = avg_speed_mbps * 1024 * 1024
     estimated_seconds = total_bytes / bytes_per_second
 
     # Use the same formatter
