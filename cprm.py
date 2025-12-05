@@ -17,6 +17,8 @@ import select
 from pathlib import Path
 from typing import List, Tuple
 import signal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # ANSI escape codes for styling
 class Colors:
@@ -67,6 +69,10 @@ class ProgressBar:
         # Time estimation
         self.start_time = time.time()
         self.last_update_time = self.start_time
+
+        # Speed tracking
+        self.last_bytes = 0
+        self.current_speed = 0.0  # bytes per second
 
         # Handle Ctrl+C gracefully
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -200,6 +206,17 @@ class ProgressBar:
             mins = int((seconds % 3600) / 60)
             return f"{hours}h {mins}m"
 
+    def _format_speed(self, bytes_per_second: float) -> str:
+        """Format speed to human-readable format."""
+        if bytes_per_second < 1024:
+            return f"{bytes_per_second:.0f}B/s"
+        elif bytes_per_second < 1024 * 1024:
+            return f"{bytes_per_second / 1024:.1f}KB/s"
+        elif bytes_per_second < 1024 * 1024 * 1024:
+            return f"{bytes_per_second / (1024 * 1024):.1f}MB/s"
+        else:
+            return f"{bytes_per_second / (1024 * 1024 * 1024):.1f}GB/s"
+
     def _get_elapsed_time(self) -> str:
         """Get elapsed time since operation started."""
         elapsed = time.time() - self.start_time
@@ -221,7 +238,19 @@ class ProgressBar:
 
         self.current_file = current_file
         self.completed_bytes += bytes_delta
-        self.last_update_time = time.time()
+
+        # Calculate speed (with smoothing)
+        current_time = time.time()
+        time_delta = current_time - self.last_update_time
+        if time_delta > 0.1:  # Update speed every 100ms
+            bytes_since_last = self.completed_bytes - self.last_bytes
+            instant_speed = bytes_since_last / time_delta
+            # Smooth the speed using exponential moving average
+            self.current_speed = 0.7 * self.current_speed + 0.3 * instant_speed
+            self.last_bytes = self.completed_bytes
+            self.last_update_time = current_time
+        else:
+            self.last_update_time = current_time
 
         cols, rows = self._get_terminal_size()
 
@@ -237,12 +266,13 @@ class ProgressBar:
         items_str = f"{self.completed_items}/{self.total_items}"
         size_str = f"{self._format_size(self.completed_bytes)}/{self._format_size(self.total_bytes)}"
 
-        # Show elapsed time
+        # Show elapsed time and speed
         elapsed_str = self._get_elapsed_time()
-        time_display = f"{elapsed_str}"
+        speed_str = self._format_speed(self.current_speed) if self.current_speed > 0 else "---"
+        time_display = f"{elapsed_str} @ {speed_str}"
 
         # Truncate filename to reasonable length and pad to fixed width
-        max_filename_len = 20  # Reduced to make room for time
+        max_filename_len = 20  # Reduced to make room for time and speed
         display_name = current_file
         if len(display_name) > max_filename_len:
             display_name = "..." + display_name[-(max_filename_len-3):]
@@ -250,8 +280,8 @@ class ProgressBar:
             # Pad with spaces to maintain constant width
             display_name = display_name.ljust(max_filename_len)
 
-        # Calculate fixed content length (icon + pct + items + size + filename + time + separators)
-        # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | 5m 23s | filename"
+        # Calculate fixed content length (icon + pct + items + size + filename + time + speed + separators)
+        # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | 5m 23s @ 999.9MB/s | filename"
         fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + len(time_display) + 3 + max_filename_len
 
         # Calculate bar width to fill remaining space
@@ -330,8 +360,8 @@ def get_all_files(paths: List[str], recursive: bool) -> List[Tuple[str, int]]:
     return files
 
 
-def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_size: int = 1024*1024):
-    """Copy a single file with progress updates."""
+def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_size: int = 16*1024*1024):
+    """Copy a single file with progress updates. Default buffer: 16MB for optimal performance."""
     src_path = Path(src)
     dst_path = Path(dst)
 
@@ -366,6 +396,92 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
                 fdst.write(buf)
                 copied += len(buf)
                 progress.update(src_path.name, len(buf))
+
+    # Preserve metadata
+    shutil.copystat(src, dst_path)
+    return True
+
+
+def copy_block(src: str, dst: str, offset: int, size: int, block_num: int, progress: ProgressBar, lock: threading.Lock):
+    """Copy a specific block of a file."""
+    with open(src, 'rb') as fsrc:
+        fsrc.seek(offset)
+        data = fsrc.read(size)
+
+        with lock:
+            with open(dst, 'r+b') as fdst:
+                fdst.seek(offset)
+                fdst.write(data)
+
+        # Update progress
+        progress.update(os.path.basename(src), len(data))
+
+    return block_num
+
+
+def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: int = 4, block_size: int = 32*1024*1024):
+    """Copy a large file using parallel block copying.
+
+    Args:
+        src: Source file path
+        dst: Destination file path
+        progress: ProgressBar instance for tracking
+        num_workers: Number of parallel workers (default: 4)
+        block_size: Size of each block in bytes (default: 32MB)
+    """
+    src_path = Path(src)
+    dst_path = Path(dst)
+
+    # Handle destination being a directory
+    if dst_path.is_dir():
+        dst_path = dst_path / src_path.name
+
+    # Check if destination file already exists
+    if dst_path.exists():
+        if not progress.ask_overwrite(str(dst_path)):
+            return False
+
+    # Create parent directories if needed
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    file_size = src_path.stat().st_size
+
+    if file_size == 0:
+        # Empty file, just touch it
+        dst_path.touch()
+        progress.update(src_path.name, 0)
+        return True
+
+    # For small files, use regular copy
+    if file_size < block_size * 2:
+        return copy_file_with_progress(src, str(dst_path), progress)
+
+    # Create destination file with correct size
+    with open(dst_path, 'wb') as fdst:
+        fdst.seek(file_size - 1)
+        fdst.write(b'\0')
+
+    # Calculate blocks
+    blocks = []
+    offset = 0
+    block_num = 0
+    while offset < file_size:
+        current_block_size = min(block_size, file_size - offset)
+        blocks.append((offset, current_block_size, block_num))
+        offset += current_block_size
+        block_num += 1
+
+    # Copy blocks in parallel
+    write_lock = threading.Lock()
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = []
+        for offset, size, num in blocks:
+            future = executor.submit(copy_block, src, str(dst_path), offset, size, num, progress, write_lock)
+            futures.append(future)
+
+        # Wait for all blocks to complete
+        for future in as_completed(futures):
+            future.result()  # This will raise any exceptions that occurred
 
     # Preserve metadata
     shutil.copystat(src, dst_path)
@@ -421,8 +537,16 @@ def estimate_copy_time(total_bytes: int) -> str:
     return pb._format_time(estimated_seconds)
 
 
-def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool = False):
-    """Execute copy operation with progress bar."""
+def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool = False, parallel: int = 0):
+    """Execute copy operation with progress bar.
+
+    Args:
+        sources: List of source file/directory paths
+        destination: Destination path
+        recursive: Whether to copy directories recursively
+        dry_run: Preview mode without copying
+        parallel: Number of parallel workers for large files (0 = disabled)
+    """
     # Validate inputs
     if not sources:
         print(f"{Colors.RED}Error: No source files specified{Colors.RESET}", file=sys.stderr)
@@ -505,11 +629,16 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
         copy_directory_with_progress(src_dir, destination, progress)
 
     # Copy individual files
-    for src_file, _ in all_files:
+    for src_file, file_size in all_files:
         if not any(src_file.startswith(d) for d in dirs_to_copy):
             try:
-                if copy_file_with_progress(src_file, destination, progress):
-                    progress.complete_item()
+                # Use parallel mode for large files (> 64MB) if enabled
+                if parallel > 0 and file_size > 64 * 1024 * 1024:
+                    if copy_file_parallel(src_file, destination, progress, num_workers=parallel):
+                        progress.complete_item()
+                else:
+                    if copy_file_with_progress(src_file, destination, progress):
+                        progress.complete_item()
             except (PermissionError, OSError) as e:
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
 
@@ -639,6 +768,8 @@ Examples:
   cprm cp file.txt /destination/
   cprm cp -r folder/ /destination/
   cprm cp *.jpg /photos/
+  cprm cp -P large_file.iso /backup/        # Parallel copy with 4 workers
+  cprm cp --parallel=8 large_file.iso /backup/  # Parallel with 8 workers
   cprm rm file.txt
   cprm rm -r folder/
   cprm rm -rf folder/  # No confirmation
@@ -653,6 +784,8 @@ Examples:
                           help='Copy directories recursively')
     cp_parser.add_argument('-n', '--dry-run', action='store_true',
                           help='Show what would be copied without actually copying')
+    cp_parser.add_argument('-P', '--parallel', type=int, nargs='?', const=4, default=0, metavar='WORKERS',
+                          help='Use parallel mode for large files (default: 4 workers if no number specified)')
     cp_parser.add_argument('sources', nargs='+', help='Source files/directories')
     cp_parser.add_argument('destination', help='Destination')
     
@@ -677,7 +810,7 @@ Examples:
         if len(args.sources) < 1:
             print(f"{Colors.RED}Error: At least one source file and a destination required{Colors.RESET}", file=sys.stderr)
             sys.exit(1)
-        do_copy(args.sources, args.destination, args.recursive, args.dry_run)
+        do_copy(args.sources, args.destination, args.recursive, args.dry_run, args.parallel)
 
     elif args.command == 'rm':
         do_remove(args.targets, args.recursive, args.force, args.dry_run)
