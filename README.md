@@ -220,4 +220,4 @@ rmo file.txt
 - **Speed Tracking**: Monitors transfer speed in real-time with exponential smoothing for stable readings
 - **Smart Mode Selection**: Automatically uses regular copy for files < 64MB even when parallel mode is enabled
 
-In dry-run mode, it scans all files without performing any operations, providing a detailed preview including estimated time based on typical disk speeds (80 MB/s for copy, 200 MB/s for delete).
+In dry-run mode, it scans all files without performing any operations, providing a detailed preview including estimated time based on modern SSD speeds (500 MB/s for copy, 1000 MB/s for delete).
