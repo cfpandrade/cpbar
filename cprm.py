@@ -143,15 +143,19 @@ class ProgressBar:
         items_str = f"{self.completed_items}/{self.total_items}"
         size_str = f"{self._format_size(self.completed_bytes)}/{self._format_size(self.total_bytes)}"
         
-        # Truncate filename to reasonable length
+        # Truncate filename to reasonable length and pad to fixed width
         max_filename_len = 25
         display_name = current_file
         if len(display_name) > max_filename_len:
             display_name = "..." + display_name[-(max_filename_len-3):]
-        
+        else:
+            # Pad with spaces to maintain constant width
+            display_name = display_name.ljust(max_filename_len)
+
         # Calculate fixed content length (icon + pct + items + size + filename + separators)
         # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | filename"
-        fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + len(display_name)
+        # Use max_filename_len instead of len(display_name) to keep bar width constant
+        fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + max_filename_len
         
         # Calculate bar width to fill remaining space
         bar_width = self._calculate_bar_width(fixed_len)
@@ -177,18 +181,18 @@ class ProgressBar:
     def finish(self):
         """Finish progress bar and print summary."""
         cols, rows = self._get_terminal_size()
-        
+
         # Clear the progress bar line
         sys.stdout.write(Cursor.move_to_bottom())
         sys.stdout.write("\033[2K")
-        
+
         # Print summary
         op_name = "Copied" if self.operation == "cp" else "Deleted"
         icon = "✅" if self.operation == "cp" else "🗑️ "
         summary = f"{icon} {Colors.GREEN}{op_name}: {self.completed_items} files ({self._format_size(self.completed_bytes)}){Colors.RESET}"
         sys.stdout.write(summary)
-        sys.stdout.write("\n")
-        
+        # Don't add extra newline - the shell prompt will handle spacing
+
         self._cleanup()
 
 
