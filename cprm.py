@@ -51,7 +51,7 @@ class ProgressBar:
     """A single progress bar that tracks total progress across all files.
     Always displays at the bottom of the terminal and adapts to terminal width.
     """
-    
+
     def __init__(self, total_items: int, total_bytes: int, operation: str):
         self.total_items = total_items
         self.total_bytes = total_bytes
@@ -61,7 +61,9 @@ class ProgressBar:
         self.current_file = ""
         self.interrupted = False
         self.started = False
-        
+        self.overwrite_all = False  # Track if user chose "overwrite all"
+        self.skipped_items = 0
+
         # Handle Ctrl+C gracefully
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGWINCH, self._resize_handler)
@@ -97,6 +99,41 @@ class ProgressBar:
         # Show cursor
         sys.stdout.write(Cursor.SHOW)
         sys.stdout.flush()
+
+    def ask_overwrite(self, filepath: str) -> bool:
+        """Ask user if they want to overwrite a file.
+        Returns True if file should be overwritten, False to skip.
+        Can also set self.overwrite_all if user chooses 'all'.
+        """
+        if self.overwrite_all:
+            return True
+
+        # Show cursor for input
+        sys.stdout.write(Cursor.SHOW)
+
+        while True:
+            response = input(f"{Colors.YELLOW}Overwrite '{filepath}'? [y/n/a/q]: {Colors.RESET}").strip().lower()
+
+            if response in ['y', 'yes']:
+                # Hide cursor again
+                sys.stdout.write(Cursor.HIDE)
+                return True
+            elif response in ['n', 'no']:
+                self.skipped_items += 1
+                # Hide cursor again
+                sys.stdout.write(Cursor.HIDE)
+                return False
+            elif response in ['a', 'all']:
+                self.overwrite_all = True
+                # Hide cursor again
+                sys.stdout.write(Cursor.HIDE)
+                return True
+            elif response in ['q', 'quit']:
+                self._cleanup()
+                print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
+                sys.exit(0)
+            else:
+                print(f"{Colors.RED}Invalid option. Use: y (yes), n (no), a (all), q (quit){Colors.RESET}")
     
     def _clear_line(self):
         """Clear the current line."""
@@ -190,6 +227,10 @@ class ProgressBar:
         op_name = "Copied" if self.operation == "cp" else "Deleted"
         icon = "✅" if self.operation == "cp" else "🗑️ "
         summary = f"{icon} {Colors.GREEN}{op_name}: {self.completed_items} files ({self._format_size(self.completed_bytes)}){Colors.RESET}"
+
+        if self.skipped_items > 0:
+            summary += f" {Colors.YELLOW}(Skipped: {self.skipped_items}){Colors.RESET}"
+
         sys.stdout.write(summary)
         # Don't add extra newline - the shell prompt will handle spacing
 
@@ -233,22 +274,28 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
     """Copy a single file with progress updates."""
     src_path = Path(src)
     dst_path = Path(dst)
-    
+
     # Handle destination being a directory
     if dst_path.is_dir():
         dst_path = dst_path / src_path.name
-    
+
+    # Check if destination file already exists
+    if dst_path.exists():
+        if not progress.ask_overwrite(str(dst_path)):
+            # User chose not to overwrite, skip this file
+            return False
+
     # Create parent directories if needed
     dst_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     file_size = src_path.stat().st_size
-    
+
     if file_size == 0:
         # Empty file, just touch it
         dst_path.touch()
         progress.update(src_path.name, 0)
-        return
-    
+        return True
+
     with open(src, 'rb') as fsrc:
         with open(dst_path, 'wb') as fdst:
             copied = 0
@@ -259,9 +306,10 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
                 fdst.write(buf)
                 copied += len(buf)
                 progress.update(src_path.name, len(buf))
-    
+
     # Preserve metadata
     shutil.copystat(src, dst_path)
+    return True
 
 
 def copy_directory_with_progress(src: str, dst: str, progress: ProgressBar):
@@ -290,8 +338,8 @@ def copy_directory_with_progress(src: str, dst: str, progress: ProgressBar):
                 dst_file = dst_path / rel_root / filename
             
             try:
-                copy_file_with_progress(src_file, str(dst_file), progress)
-                progress.complete_item()
+                if copy_file_with_progress(src_file, str(dst_file), progress):
+                    progress.complete_item()
             except (PermissionError, OSError) as e:
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
 
@@ -358,8 +406,8 @@ def do_copy(sources: List[str], destination: str, recursive: bool):
     for src_file, _ in all_files:
         if not any(src_file.startswith(d) for d in dirs_to_copy):
             try:
-                copy_file_with_progress(src_file, destination, progress)
-                progress.complete_item()
+                if copy_file_with_progress(src_file, destination, progress):
+                    progress.complete_item()
             except (PermissionError, OSError) as e:
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
     
