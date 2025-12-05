@@ -11,9 +11,9 @@ echo "🚀 Installing cprm..."
 # Create install directory if it doesn't exist
 mkdir -p "$INSTALL_DIR"
 
-# Copy the script
-cp cprm.py "$INSTALL_DIR/$SCRIPT_NAME"
-chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
+# Copy the script (use command to bypass any aliases)
+command cp -f cprm.py "$INSTALL_DIR/$SCRIPT_NAME"
+command chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 
 echo "✅ Script installed to $INSTALL_DIR/$SCRIPT_NAME"
 

@@ -7,7 +7,10 @@
 - **Unified Progress Bar**: Tracks total progress across all files and directories.
 - **Visual Feedback**: Shows operation type (📋/🗑️), percentage, progress bar, item count, total size, and current filename.
 - **Recursive Support**: Fully supports recursive copy (`cp -r`) and remove (`rm -r`).
-- **Safety First**: 
+- **Smart Overwrite Handling**:
+  - Prompts when destination files exist with options: yes (y), no (n), all (a), quit (q).
+  - All prompts appear in the same line for a clean interface.
+- **Safety First**:
   - `rm` asks for confirmation by default with a 3-second safety countdown.
   - `rm -f` skips confirmation (like standard `rm`).
 - **Drop-in Replacement**: Installs aliases so you can keep using `cp` and `rm` as usual.
@@ -22,7 +25,7 @@ To install `cpbar`, simply run the installation script:
 ```
 
 The script will:
-1. Install `cprm` to `~/.local/bin/`.
+1. Install `cprm` to `~/.local/bin/` (automatically overwrites any existing version).
 2. Add `~/.local/bin` to your `PATH` if needed.
 3. Configure aliases in your `.zshrc` or `.bashrc`.
 
@@ -31,6 +34,8 @@ After installation, reload your shell configuration:
 ```bash
 source ~/.zshrc  # or source ~/.bashrc
 ```
+
+To update to a newer version, just run `./install.sh` again.
 
 ## Usage
 
@@ -61,6 +66,22 @@ rm -r old_folder/
 # Force remove (no confirmation)
 rm -rf temp_folder/
 ```
+
+### Handling File Overwrites
+
+When copying files that already exist at the destination, `cprm` will prompt you for each file:
+
+```
+Overwrite '/path/to/file.txt'? [y/n/a/q]:
+```
+
+Options:
+- **y** (yes) - Overwrite this file
+- **n** (no) - Skip this file
+- **a** (all) - Overwrite all remaining files without asking
+- **q** (quit) - Cancel the entire operation
+
+All prompts appear on the same line for a clean, organized interface.
 
 ### Using Original Commands
 
