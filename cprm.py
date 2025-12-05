@@ -108,23 +108,50 @@ class ProgressBar:
         if self.overwrite_all:
             return True
 
+        _, rows = self._get_terminal_size()
+
+        # Move to the line just above the progress bar and clear it
+        sys.stdout.write(Cursor.move_to(rows - 1, 1))
+        sys.stdout.write("\033[2K")  # Clear entire line
+        sys.stdout.flush()
+
         # Show cursor for input
         sys.stdout.write(Cursor.SHOW)
 
         while True:
-            response = input(f"{Colors.YELLOW}Overwrite '{filepath}'? [y/n/a/q]: {Colors.RESET}").strip().lower()
+            # Move to the same line each time
+            sys.stdout.write(Cursor.move_to(rows - 1, 1))
+            sys.stdout.write("\033[2K")  # Clear line
+            sys.stdout.flush()
+
+            # Use sys.stdout.write + input to control positioning
+            sys.stdout.write(f"{Colors.YELLOW}Overwrite '{filepath}'? [y/n/a/q]: {Colors.RESET}")
+            sys.stdout.flush()
+            response = input().strip().lower()
 
             if response in ['y', 'yes']:
+                # Clear the prompt line
+                sys.stdout.write(Cursor.move_to(rows - 1, 1))
+                sys.stdout.write("\033[2K")
+                sys.stdout.flush()
                 # Hide cursor again
                 sys.stdout.write(Cursor.HIDE)
                 return True
             elif response in ['n', 'no']:
                 self.skipped_items += 1
+                # Clear the prompt line
+                sys.stdout.write(Cursor.move_to(rows - 1, 1))
+                sys.stdout.write("\033[2K")
+                sys.stdout.flush()
                 # Hide cursor again
                 sys.stdout.write(Cursor.HIDE)
                 return False
             elif response in ['a', 'all']:
                 self.overwrite_all = True
+                # Clear the prompt line
+                sys.stdout.write(Cursor.move_to(rows - 1, 1))
+                sys.stdout.write("\033[2K")
+                sys.stdout.flush()
                 # Hide cursor again
                 sys.stdout.write(Cursor.HIDE)
                 return True
@@ -133,7 +160,12 @@ class ProgressBar:
                 print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
                 sys.exit(0)
             else:
-                print(f"{Colors.RED}Invalid option. Use: y (yes), n (no), a (all), q (quit){Colors.RESET}")
+                # Show error on the same line
+                sys.stdout.write(Cursor.move_to(rows - 1, 1))
+                sys.stdout.write("\033[2K")
+                sys.stdout.write(f"{Colors.RED}Invalid option. Use: y (yes), n (no), a (all), q (quit){Colors.RESET}")
+                sys.stdout.flush()
+                time.sleep(1.5)  # Show error briefly before re-prompting
     
     def _clear_line(self):
         """Clear the current line."""
