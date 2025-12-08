@@ -1,18 +1,59 @@
 #!/bin/bash
 # Installation script for cprm
+# Author: Carlos Andrade <cfpandrade@gmail.com>
 
 set -e
 
 INSTALL_DIR="$HOME/.local/bin"
+LIB_DIR="$HOME/.local/lib"
 SCRIPT_NAME="cprm"
 
 echo "🚀 Installing cprm..."
 
-# Create install directory if it doesn't exist
+# Create install directories if they don't exist
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$LIB_DIR"
 
-# Copy the script (use command to bypass any aliases)
-command cp -f cprm.py "$INSTALL_DIR/$SCRIPT_NAME"
+# Clean up any existing installation to avoid conflicts
+if [ -e "$INSTALL_DIR/$SCRIPT_NAME" ]; then
+    echo "   🧹 Removing previous installation..."
+    command rm -rf "$INSTALL_DIR/$SCRIPT_NAME"
+fi
+if [ -d "$INSTALL_DIR/cprm" ]; then
+    command rm -rf "$INSTALL_DIR/cprm"
+fi
+if [ -d "$LIB_DIR/cprm" ]; then
+    command rm -rf "$LIB_DIR/cprm"
+fi
+
+# Copy the entire project to lib directory
+echo "   📦 Installing cprm package..."
+mkdir -p "$LIB_DIR/cprm"
+if [ -d "cprm" ]; then
+    command cp -r cprm/* "$LIB_DIR/cprm/"
+else
+    echo "   ⚠️  Warning: cprm package directory not found"
+    exit 1
+fi
+echo "   ✅ Package installed to $LIB_DIR/cprm/"
+
+# Create wrapper script in bin
+cat > "$INSTALL_DIR/$SCRIPT_NAME" << 'EOF'
+#!/usr/bin/env python3
+import sys
+import os
+
+# Add the library path to Python's module search path
+lib_path = os.path.join(os.path.expanduser('~'), '.local', 'lib')
+sys.path.insert(0, lib_path)
+
+# Import and run the main module
+from cprm.core import main
+
+if __name__ == '__main__':
+    main()
+EOF
+
 command chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 
 echo "✅ Script installed to $INSTALL_DIR/$SCRIPT_NAME"

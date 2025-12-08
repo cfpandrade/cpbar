@@ -39,10 +39,11 @@ To install `cpbar`, simply run the installation script:
 ```
 
 The script will:
-1. Install `cprm` to `~/.local/bin/` (automatically overwrites any existing version).
-2. Add `~/.local/bin` to your `PATH` if needed.
-3. Configure aliases in your `.zshrc` or `.bashrc`.
-4. Optionally run a benchmark to detect optimal parallel settings for your system (~30 seconds).
+1. Install the `cprm` package to `~/.local/lib/cprm/` (library files).
+2. Create an executable wrapper in `~/.local/bin/cprm` (entry point).
+3. Add `~/.local/bin` to your `PATH` if needed.
+4. Configure aliases in your `.zshrc` or `.bashrc`.
+5. Optionally run a benchmark to detect optimal parallel settings for your system (~30 seconds).
 
 After installation, reload your shell configuration:
 
@@ -221,3 +222,36 @@ rmo file.txt
 - **Smart Mode Selection**: Automatically uses regular copy for files < 64MB even when parallel mode is enabled
 
 In dry-run mode, it scans all files without performing any operations, providing a detailed preview including estimated time based on modern SSD speeds (500 MB/s for copy, 1000 MB/s for delete).
+
+## Project Structure
+
+The project is organized as a modular Python package:
+
+```
+cpbar/
+├── cprm.py              # Main entry point
+├── install.sh           # Installation script
+└── cprm/                # Python package
+    ├── __init__.py      # Package initialization
+    ├── __main__.py      # Module entry point
+    ├── core.py          # CLI argument parsing
+    ├── operations.py    # File copy/remove operations
+    ├── ui.py            # Progress bar and UI components
+    ├── utils.py         # Utility functions and config
+    └── benchmark.py     # Performance benchmarking
+```
+
+## Author
+
+**Carlos Andrade**
+- Email: cfpandrade@gmail.com
+- GitHub: [@cfpandrade](https://github.com/cfpandrade)
+- Repository: [github.com/cfpandrade/cpbar](https://github.com/cfpandrade/cpbar)
+
+## License
+
+This project is open source and available under the MIT License.
+
+## Contributing
+
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/cfpandrade/cpbar/issues).
