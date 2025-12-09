@@ -2,7 +2,7 @@
 Core functionality and CLI for cprm.
 Handles command-line argument parsing and dispatches to appropriate operations.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 import sys

@@ -2,7 +2,7 @@
 Utility functions for cprm.
 Handles configuration management and formatting functions.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 import json

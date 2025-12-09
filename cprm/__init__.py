@@ -4,7 +4,7 @@ cprm - Enhanced cp/rm with unified progress bar
 A lightweight wrapper for cp and rm commands that adds a unified,
 beautiful progress bar to terminal file operations.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 __version__ = "1.2.0"

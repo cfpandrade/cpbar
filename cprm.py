@@ -10,7 +10,7 @@ Usage:
 
 This is the main entry point that delegates to the cprm package.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 from cprm.core import main

@@ -2,7 +2,7 @@
 Benchmark functionality for cprm.
 Tests different worker counts to determine optimal configuration.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 import os

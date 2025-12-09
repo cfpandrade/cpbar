@@ -2,7 +2,7 @@
 UI components for cprm.
 Handles progress bar, colors, and cursor control.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 import sys
