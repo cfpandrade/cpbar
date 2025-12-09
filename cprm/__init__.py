@@ -9,7 +9,7 @@ Author: Carlos Andrade <carlos@perezandrade.com>
 
 __version__ = "1.2.0"
 __author__ = "Carlos Andrade"
-__email__ = "cfpandrade@gmail.com"
+__email__ = "carlos@perezandrade.com"
 
 from .core import main
 from .operations import do_copy, do_remove
