@@ -3,7 +3,7 @@
 Entry point for running cprm as a module.
 Allows: python -m cprm
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 from .core import main

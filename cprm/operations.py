@@ -2,7 +2,7 @@
 File operations for cprm.
 Handles copy and remove operations with progress tracking.
 
-Author: Carlos Andrade <cfpandrade@gmail.com>
+Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
 import os

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Installation script for cprm
-# Author: Carlos Andrade <cfpandrade@gmail.com>
+# Author: Carlos Andrade <carlos@perezandrade.com>
 
 set -e
 
