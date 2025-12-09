@@ -31,7 +31,7 @@ Examples:
   cprm rm -rf folder/  # No confirmation
 
 Author:
-  Carlos Andrade <cfpandrade@gmail.com>
+  Carlos Andrade <carlos@perezandrade.com>
   https://github.com/cfpandrade/cpbar
         """
     )
@@ -54,6 +54,10 @@ Performance tips:
   • Optimal workers: 4-8 for most systems
   • Shows real-time speed (MB/s) during transfer
   • 16MB buffer for efficient operations
+
+Author:
+  Carlos Andrade <carlos@perezandrade.com>
+  https://github.com/cfpandrade/cpbar
                                      """,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     cp_parser.add_argument('-r', '-R', '--recursive', action='store_true',
@@ -82,6 +86,10 @@ The benchmark will:
   • Run 3 trials for each configuration
   • Save the optimal setting to ~/.config/cprm/config.json
   • This setting becomes the default when using -P flag
+
+Author:
+  Carlos Andrade <carlos@perezandrade.com>
+  https://github.com/cfpandrade/cpbar
                                             """,
                                             formatter_class=argparse.RawDescriptionHelpFormatter)
     benchmark_parser.add_argument('-q', '--quiet', action='store_true',
@@ -102,6 +110,10 @@ Safety features:
   • Shows total files and size before deletion
   • Dry-run mode to preview operations
   • Force mode (-f) to skip confirmation
+
+Author:
+  Carlos Andrade <carlos@perezandrade.com>
+  https://github.com/cfpandrade/cpbar
                                      """,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     rm_parser.add_argument('-r', '-R', '--recursive', action='store_true',

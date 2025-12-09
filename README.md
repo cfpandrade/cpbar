@@ -244,7 +244,7 @@ cpbar/
 ## Author
 
 **Carlos Andrade**
-- Email: cfpandrade@gmail.com
+- Email: carlos@perezandrade.com
 - GitHub: [@cfpandrade](https://github.com/cfpandrade)
 - Repository: [github.com/cfpandrade/cpbar](https://github.com/cfpandrade/cpbar)
 
