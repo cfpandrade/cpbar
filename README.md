@@ -32,7 +32,29 @@
 
 ## Installation
 
-To install `cpbar`, simply run the installation script:
+### Option 1: Debian / Ubuntu (.deb) — recommended
+
+Download the latest `.deb` from [Releases](../../releases/latest) and install:
+
+```bash
+wget https://github.com/cpbar/cpbar/releases/latest/download/cprm_<version>_all.deb
+sudo dpkg -i cprm_<version>_all.deb
+```
+
+Bash users get aliases automatically via `/etc/profile.d/cprm.sh` (takes effect on next login or `source /etc/profile.d/cprm.sh`).
+
+Zsh users: add these lines to `~/.zshrc` and reload:
+
+```bash
+alias cpo='/bin/cp'
+alias rmo='/bin/rm'
+alias cp='cprm cp'
+alias rm='cprm rm'
+```
+
+To upgrade, just install the new `.deb` over the old one with `sudo dpkg -i`.
+
+### Option 2: Script install (any distro)
 
 ```bash
 ./install.sh
@@ -50,8 +72,6 @@ After installation, reload your shell configuration:
 ```bash
 source ~/.zshrc  # or source ~/.bashrc
 ```
-
-To update to a newer version, just run `./install.sh` again.
 
 **Note:** The installer will ask if you want to run a benchmark to optimize performance. This is recommended but optional—you can run `cprm benchmark` later if you skip it.
 
