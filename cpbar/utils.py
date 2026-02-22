@@ -1,5 +1,5 @@
 """
-Utility functions for cprm.
+Utility functions for cpbar.
 Handles configuration management and formatting functions.
 
 Author: Carlos Andrade <carlos@perezandrade.com>
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Tuple
 
 # Configuration file management
-CONFIG_FILE = Path.home() / ".config" / "cprm" / "config.json"
+CONFIG_FILE = Path.home() / ".config" / "cpbar" / "config.json"
 
 # Constants
 BUFFER_SIZE = 16 * 1024 * 1024  # 16MB

@@ -1,14 +1,14 @@
 #!/bin/bash
-# Installation script for cprm
+# Installation script for cpbar
 # Author: Carlos Andrade <carlos@perezandrade.com>
 
 set -e
 
 INSTALL_DIR="$HOME/.local/bin"
 LIB_DIR="$HOME/.local/lib"
-SCRIPT_NAME="cprm"
+SCRIPT_NAME="cpbar"
 
-echo "🚀 Installing cprm..."
+echo "🚀 Installing cpbar..."
 
 # Create install directories if they don't exist
 mkdir -p "$INSTALL_DIR"
@@ -19,23 +19,23 @@ if [ -e "$INSTALL_DIR/$SCRIPT_NAME" ]; then
     echo "   🧹 Removing previous installation..."
     command rm -rf "$INSTALL_DIR/$SCRIPT_NAME"
 fi
-if [ -d "$INSTALL_DIR/cprm" ]; then
-    command rm -rf "$INSTALL_DIR/cprm"
+if [ -d "$INSTALL_DIR/cpbar" ]; then
+    command rm -rf "$INSTALL_DIR/cpbar"
 fi
-if [ -d "$LIB_DIR/cprm" ]; then
-    command rm -rf "$LIB_DIR/cprm"
+if [ -d "$LIB_DIR/cpbar" ]; then
+    command rm -rf "$LIB_DIR/cpbar"
 fi
 
 # Copy the entire project to lib directory
-echo "   📦 Installing cprm package..."
-mkdir -p "$LIB_DIR/cprm"
-if [ -d "cprm" ]; then
-    command cp -r cprm/* "$LIB_DIR/cprm/"
+echo "   📦 Installing cpbar package..."
+mkdir -p "$LIB_DIR/cpbar"
+if [ -d "cpbar" ]; then
+    command cp -r cpbar/* "$LIB_DIR/cpbar/"
 else
-    echo "   ⚠️  Warning: cprm package directory not found"
+    echo "   ⚠️  Warning: cpbar package directory not found"
     exit 1
 fi
-echo "   ✅ Package installed to $LIB_DIR/cprm/"
+echo "   ✅ Package installed to $LIB_DIR/cpbar/"
 
 # Create wrapper script in bin
 cat > "$INSTALL_DIR/$SCRIPT_NAME" << 'EOF'
@@ -48,7 +48,7 @@ lib_path = os.path.join(os.path.expanduser('~'), '.local', 'lib')
 sys.path.insert(0, lib_path)
 
 # Import and run the main module
-from cprm.core import main
+from cpbar.core import main
 
 if __name__ == '__main__':
     main()
@@ -60,13 +60,13 @@ echo "✅ Script installed to $INSTALL_DIR/$SCRIPT_NAME"
 
 # Alias block to add
 ALIAS_BLOCK='
-# cprm aliases - Enhanced cp/rm with progress bars
+# cpbar aliases - Enhanced cp/rm with progress bars
 # Original commands (use these to bypass progress bars)
 alias cpo="cp"
 alias rmo="rm"
 # Replace cp/rm with enhanced versions
-alias cp="cprm cp"
-alias rm="cprm rm"
+alias cp="cpbar cp"
+alias rm="cpbar rm"
 '
 
 PATH_EXPORT='export PATH="$HOME/.local/bin:$PATH"'
@@ -86,7 +86,7 @@ configure_rc_file() {
     # Check if PATH includes install dir
     if ! grep -q '.local/bin' "$rc_file" 2>/dev/null; then
         echo "" >> "$rc_file"
-        echo "# Added by cprm installer" >> "$rc_file"
+        echo "# Added by cpbar installer" >> "$rc_file"
         echo "$PATH_EXPORT" >> "$rc_file"
         echo "   ✅ PATH added"
     else
@@ -94,7 +94,7 @@ configure_rc_file() {
     fi
     
     # Check if aliases already exist
-    if ! grep -q "cprm aliases" "$rc_file" 2>/dev/null; then
+    if ! grep -q "cpbar aliases" "$rc_file" 2>/dev/null; then
         echo "$ALIAS_BLOCK" >> "$rc_file"
         echo "   ✅ Aliases added"
     else
@@ -164,7 +164,7 @@ if [ -z "$RUN_BENCHMARK" ] || [ "$RUN_BENCHMARK" = "y" ] || [ "$RUN_BENCHMARK" =
     "$INSTALL_DIR/$SCRIPT_NAME" benchmark
     echo ""
 else
-    echo "  ℹ️  Skipped. You can run it later with: cprm benchmark"
+    echo "  ℹ️  Skipped. You can run it later with: cpbar benchmark"
     echo ""
 fi
 
@@ -186,7 +186,7 @@ echo ""
 echo "Advanced options:"
 echo "  -P, --parallel=N  Use N workers for large files"
 echo "  -n, --dry-run     Preview operations before executing"
-echo "  cprm benchmark    Detect optimal parallel workers for your system"
+echo "  cpbar benchmark    Detect optimal parallel workers for your system"
 echo ""
 echo "Original commands (no progress bar):"
 echo "  cpo file.txt /destination/         # Original cp"

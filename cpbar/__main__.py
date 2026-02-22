@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Entry point for running cprm as a module.
-Allows: python -m cprm
+Entry point for running cpbar as a module.
+Allows: python -m cpbar
 
 Author: Carlos Andrade <carlos@perezandrade.com>
 """
