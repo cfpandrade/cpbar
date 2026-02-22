@@ -1,6 +1,6 @@
-# cpbar (cprm)
+# cpbar
 
-**cpbar** (installed as `cprm`) is a lightweight wrapper for `cp` and `rm` commands that adds a unified, beautiful progress bar to your terminal file operations. It is written in Python and designed to be a drop-in replacement for standard file management commands.
+**cpbar** is a lightweight wrapper for `cp` and `rm` commands that adds a unified, beautiful progress bar to your terminal file operations. It is written in Python and designed to be a drop-in replacement for standard file management commands.
 
 ## Features
 
@@ -37,19 +37,19 @@
 Download the latest `.deb` from [Releases](../../releases/latest) and install:
 
 ```bash
-wget https://github.com/cpbar/cpbar/releases/latest/download/cprm_<version>_all.deb
-sudo dpkg -i cprm_<version>_all.deb
+wget https://github.com/cfpandrade/cpbar/releases/latest/download/cpbar_<version>_all.deb
+sudo dpkg -i cpbar_<version>_all.deb
 ```
 
-Bash users get aliases automatically via `/etc/profile.d/cprm.sh` (takes effect on next login or `source /etc/profile.d/cprm.sh`).
+Bash users get aliases automatically via `/etc/profile.d/cpbar.sh` (takes effect on next login or `source /etc/profile.d/cpbar.sh`).
 
 Zsh users: add these lines to `~/.zshrc` and reload:
 
 ```bash
 alias cpo='/bin/cp'
 alias rmo='/bin/rm'
-alias cp='cprm cp'
-alias rm='cprm rm'
+alias cp='cpbar cp'
+alias rm='cpbar rm'
 ```
 
 To upgrade, just install the new `.deb` over the old one with `sudo dpkg -i`.
@@ -61,8 +61,8 @@ To upgrade, just install the new `.deb` over the old one with `sudo dpkg -i`.
 ```
 
 The script will:
-1. Install the `cprm` package to `~/.local/lib/cprm/` (library files).
-2. Create an executable wrapper in `~/.local/bin/cprm` (entry point).
+1. Install the `cpbar` package to `~/.local/lib/cpbar/` (library files).
+2. Create an executable wrapper in `~/.local/bin/cpbar` (entry point).
 3. Add `~/.local/bin` to your `PATH` if needed.
 4. Configure aliases in your `.zshrc` or `.bashrc`.
 5. Optionally run a benchmark to detect optimal parallel settings for your system (~30 seconds).
@@ -73,7 +73,7 @@ After installation, reload your shell configuration:
 source ~/.zshrc  # or source ~/.bashrc
 ```
 
-**Note:** The installer will ask if you want to run a benchmark to optimize performance. This is recommended but optional—you can run `cprm benchmark` later if you skip it.
+**Note:** The installer will ask if you want to run a benchmark to optimize performance. This is recommended but optional—you can run `cpbar benchmark` later if you skip it.
 
 ## Usage
 
@@ -153,7 +153,7 @@ Files (showing first 10):
 
 ### Handling File Overwrites
 
-When copying files that already exist at the destination, `cprm` will prompt you for each file:
+When copying files that already exist at the destination, `cpbar` will prompt you for each file:
 
 ```
 Overwrite '/path/to/file.txt'? [y/n/a/q]:
@@ -190,7 +190,7 @@ cp -P *.iso /backup/
 - ❌ **HDD to HDD**: May not improve or could be slower
 
 **Performance tips:**
-- Run `cprm benchmark` to auto-detect the optimal settings for your system
+- Run `cpbar benchmark` to auto-detect the optimal settings for your system
 - Use `-P` flag to use the benchmarked optimal value
 - Files > 1GB see the most benefit
 - Real-time speed shown in progress bar (watch for MB/s or GB/s)
@@ -201,7 +201,7 @@ cp -P *.iso /backup/
 
 ```bash
 # Run benchmark to detect optimal settings
-cprm benchmark
+cpbar benchmark
 
 # The optimal value is saved and becomes the default when using -P
 cp -P large_file.iso /backup/
@@ -212,7 +212,7 @@ cp -P large_file.iso /backup/
 - Tests with 1, 2, 4, 6, and 8 workers
 - Runs 3 trials for each configuration
 - Determines the fastest configuration
-- Saves the result to `~/.config/cprm/config.json`
+- Saves the result to `~/.config/cpbar/config.json`
 
 **Note:** The installer optionally runs the benchmark automatically during installation. You can re-run it anytime if you upgrade your hardware or move to a different system.
 
@@ -232,7 +232,7 @@ rmo file.txt
 
 ## How it Works
 
-`cprm` calculates the total size of all source files before starting the operation to provide an accurate progress bar. It handles both file-to-file and directory-to-directory operations, preserving metadata where possible.
+`cpbar` calculates the total size of all source files before starting the operation to provide an accurate progress bar. It handles both file-to-file and directory-to-directory operations, preserving metadata where possible.
 
 ### Performance Optimizations
 
@@ -249,9 +249,9 @@ The project is organized as a modular Python package:
 
 ```
 cpbar/
-├── cprm.py              # Main entry point
+├── cpbar.py             # Main entry point
 ├── install.sh           # Installation script
-└── cprm/                # Python package
+└── cpbar/               # Python package
     ├── __init__.py      # Package initialization
     ├── __main__.py      # Module entry point
     ├── core.py          # CLI argument parsing
