@@ -18,7 +18,7 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=$(python3 -c "import re; m = re.search(r\"__version__ = '(.+)'\", open('cpbar/__init__.py').read()); print(m.group(1))")
+          VERSION=$(grep -oP '__version__ = "\K[^"]+' cpbar/__init__.py)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           echo "pkg=cpbar_${VERSION}_all" >> $GITHUB_OUTPUT
