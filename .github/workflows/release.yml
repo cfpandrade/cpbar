@@ -1,0 +1,151 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(python3 -c "import re; m = re.search(r\"__version__ = '(.+)'\", open('cprm/__init__.py').read()); print(m.group(1))")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "pkg=cprm_${VERSION}_all" >> $GITHUB_OUTPUT
+
+      - name: Build .deb package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PKG="${{ steps.version.outputs.pkg }}"
+
+          # Directory structure
+          mkdir -p "${PKG}/DEBIAN"
+          mkdir -p "${PKG}/usr/bin"
+          mkdir -p "${PKG}/usr/lib/cprm"
+          mkdir -p "${PKG}/etc/profile.d"
+
+          # DEBIAN/control
+          cat > "${PKG}/DEBIAN/control" <<EOF
+          Package: cprm
+          Version: ${VERSION}
+          Architecture: all
+          Maintainer: Carlos Andrade <carlos@perezandrade.com>
+          Depends: python3 (>= 3.6)
+          Description: Enhanced cp/rm with unified progress bar
+           A lightweight wrapper for cp and rm commands that adds a beautiful
+           progress bar to terminal file operations.
+          EOF
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' "${PKG}/DEBIAN/control"
+
+          # Copy Python package
+          cp -r cprm/. "${PKG}/usr/lib/cprm/"
+
+          # Wrapper script at /usr/bin/cprm
+          cat > "${PKG}/usr/bin/cprm" <<'EOF'
+          #!/usr/bin/env python3
+          import sys
+          sys.path.insert(0, '/usr/lib')
+          from cprm.core import main
+          if __name__ == '__main__':
+              main()
+          EOF
+          sed -i 's/^          //' "${PKG}/usr/bin/cprm"
+          chmod 755 "${PKG}/usr/bin/cprm"
+
+          # /etc/profile.d/cprm.sh — aliases for bash login shells
+          cat > "${PKG}/etc/profile.d/cprm.sh" <<'EOF'
+          # cprm aliases — Enhanced cp/rm with progress bars
+          alias cpo='/bin/cp'
+          alias rmo='/bin/rm'
+          alias cp='cprm cp'
+          alias rm='cprm rm'
+          EOF
+          sed -i 's/^          //' "${PKG}/etc/profile.d/cprm.sh"
+
+          # DEBIAN/postinst
+          cat > "${PKG}/DEBIAN/postinst" <<'EOF'
+          #!/bin/bash
+          set -e
+          echo ""
+          echo "✅ cprm installed successfully!"
+          echo ""
+          echo "Aliases are auto-loaded for bash login shells via /etc/profile.d/cprm.sh"
+          echo ""
+          echo "For zsh, add these lines to ~/.zshrc:"
+          echo "  alias cpo='/bin/cp'"
+          echo "  alias rmo='/bin/rm'"
+          echo "  alias cp='cprm cp'"
+          echo "  alias rm='cprm rm'"
+          echo ""
+          echo "Then reload your shell: source ~/.zshrc"
+          EOF
+          sed -i 's/^          //' "${PKG}/DEBIAN/postinst"
+          chmod 755 "${PKG}/DEBIAN/postinst"
+
+          # Build
+          dpkg-deb --build --root-owner-group "${PKG}"
+          echo "Built: ${PKG}.deb"
+          ls -lh "${PKG}.deb"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          PKG="${{ steps.version.outputs.pkg }}"
+          REPO="${{ github.repository }}"
+
+          gh release create "${TAG}" \
+            --title "cprm v${VERSION}" \
+            --notes "## What's new in v${VERSION}
+
+          See [commit history](https://github.com/${REPO}/commits/${TAG}) for details.
+
+          ---
+
+          ## Install
+
+          ### Debian / Ubuntu (.deb) — recommended
+
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/${PKG}.deb
+          sudo dpkg -i ${PKG}.deb
+          \`\`\`
+
+          After install, reload your shell or open a new terminal.
+          Bash users get aliases automatically via \`/etc/profile.d/cprm.sh\`.
+          Zsh users: add the following to \`~/.zshrc\`:
+
+          \`\`\`bash
+          alias cpo='/bin/cp'
+          alias rmo='/bin/rm'
+          alias cp='cprm cp'
+          alias rm='cprm rm'
+          \`\`\`
+
+          ### Script install (any distro)
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${REPO}/master/install.sh | bash
+          \`\`\`
+
+          ### Upgrade from .deb
+
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/${PKG}.deb
+          sudo dpkg -i ${PKG}.deb
+          \`\`\`
+          " \
+            "${PKG}.deb"
