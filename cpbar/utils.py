@@ -110,41 +110,43 @@ def estimate_operation_time(total_bytes: int, operation: str = 'cp') -> str:
     return format_time(estimated_seconds)
 
 
-def validate_destination(path: Path) -> None:
-    """Validate destination is not a critical system directory.
+def is_system_directory(path: Path) -> bool:
+    """Check if path is a system directory that requires native cp/rm.
 
     Args:
-        path: Destination path to validate
+        path: Path to check
 
-    Raises:
-        ValueError: If path is a critical system directory
+    Returns:
+        True if path is inside a system directory
     """
-    critical_paths = ['/bin', '/boot', '/etc', '/lib', '/lib64', '/sbin', '/sys', '/usr', '/proc', '/dev']
+    system_paths = ['/bin', '/boot', '/etc', '/lib', '/lib64', '/sbin', '/sys', '/usr', '/proc', '/dev']
 
     try:
         resolved = path.resolve()
-        for critical in critical_paths:
-            critical_path = Path(critical)
-            if not critical_path.exists():
+        for system_dir in system_paths:
+            system_path = Path(system_dir)
+            if not system_path.exists():
                 continue
-            critical_resolved = critical_path.resolve()
+            system_resolved = system_path.resolve()
 
-            # Check if destination is exactly a critical path or inside one
-            if resolved == critical_resolved:
-                raise ValueError(f"Cannot write to system directory: {path}")
+            if resolved == system_resolved:
+                return True
 
-            # Use is_relative_to if available (Python 3.9+), otherwise use try/except
             if hasattr(resolved, 'is_relative_to'):
-                if resolved.is_relative_to(critical_resolved):
-                    raise ValueError(f"Cannot write to system directory: {path}")
+                if resolved.is_relative_to(system_resolved):
+                    return True
             else:
                 try:
-                    resolved.relative_to(critical_resolved)
-                    raise ValueError(f"Cannot write to system directory: {path}")
+                    resolved.relative_to(system_resolved)
+                    return True
                 except ValueError:
-                    pass  # Not relative, this is fine
-    except (OSError, RuntimeError) as e:
-        # If we can't resolve the path due to permissions, warn but allow
-        # The operation will fail later with a more specific error
-        import sys
-        print(f"Warning: Could not validate destination path: {e}", file=sys.stderr)
+                    pass
+    except (OSError, RuntimeError):
+        pass
+
+    return False
+
+
+def validate_destination(path: Path) -> None:
+    """Legacy validation function - now handled via fallback to native cp."""
+    pass
