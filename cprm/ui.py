@@ -9,6 +9,7 @@ import sys
 import shutil
 import signal
 import time
+import threading
 from typing import Tuple
 
 from .utils import (
@@ -72,6 +73,9 @@ class ProgressBar:
         # Speed tracking
         self.last_bytes = 0
         self.current_speed = 0.0  # bytes per second
+
+        # Thread safety lock for concurrent updates
+        self._lock = threading.Lock()
 
         # Handle Ctrl+C gracefully
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -198,53 +202,71 @@ class ProgressBar:
         return int(max(10, available))
 
     def update(self, current_file: str, bytes_delta: int = 0):
-        """Update progress bar with current state."""
+        """Update progress bar with current state (thread-safe)."""
         self._setup()
 
-        self.current_file = current_file
-        self.completed_bytes += bytes_delta
+        with self._lock:
+            self.current_file = current_file
+            self.completed_bytes += bytes_delta
 
-        # Calculate speed (with smoothing)
-        current_time = time.time()
-        time_delta = current_time - self.last_update_time
+            # Calculate speed (with smoothing)
+            current_time = time.time()
+            time_delta = current_time - self.last_update_time
 
-        # Reset speed if there was a long pause (e.g., waiting for user input)
-        if time_delta > 2.0:
-            self.current_speed = 0.0
-            self.last_bytes = self.completed_bytes
-            self.last_update_time = current_time
-        elif time_delta > SPEED_UPDATE_INTERVAL:  # Update speed every 100ms
-            bytes_since_last = self.completed_bytes - self.last_bytes
-            instant_speed = bytes_since_last / time_delta
-            # Smooth the speed using exponential moving average
-            self.current_speed = SPEED_SMOOTHING_FACTOR * self.current_speed + (1 - SPEED_SMOOTHING_FACTOR) * instant_speed
-            self.last_bytes = self.completed_bytes
-            self.last_update_time = current_time
-        else:
-            self.last_update_time = current_time
+            # Reset speed if there was a long pause (e.g., waiting for user input)
+            if time_delta > 2.0:
+                self.current_speed = 0.0
+                self.last_bytes = self.completed_bytes
+                self.last_update_time = current_time
+            elif time_delta > SPEED_UPDATE_INTERVAL:  # Update speed every 100ms
+                bytes_since_last = self.completed_bytes - self.last_bytes
+                instant_speed = bytes_since_last / time_delta
+                # Smooth the speed using exponential moving average
+                self.current_speed = SPEED_SMOOTHING_FACTOR * self.current_speed + (1 - SPEED_SMOOTHING_FACTOR) * instant_speed
+                self.last_bytes = self.completed_bytes
+                self.last_update_time = current_time
+            else:
+                self.last_update_time = current_time
+
+            # Capture values for rendering outside lock
+            progress_data = {
+                'completed_bytes': self.completed_bytes,
+                'completed_items': self.completed_items,
+                'total_bytes': self.total_bytes,
+                'total_items': self.total_items,
+                'current_speed': self.current_speed,
+                'current_file': self.current_file,
+            }
 
         cols, rows = self._get_terminal_size()
 
-        # Calculate progress
-        if self.total_bytes > 0:
-            progress = min(self.completed_bytes / self.total_bytes, 1.0)
+        # Calculate progress using captured data
+        completed_bytes = progress_data['completed_bytes']
+        completed_items = progress_data['completed_items']
+        total_bytes = progress_data['total_bytes']
+        total_items = progress_data['total_items']
+        current_speed = progress_data['current_speed']
+        display_file = progress_data['current_file']
+
+        if total_bytes > 0:
+            progress = min(completed_bytes / total_bytes, 1.0)
         else:
-            progress = self.completed_items / self.total_items if self.total_items > 0 else 1.0
+            progress = completed_items / total_items if total_items > 0 else 1.0
 
         # Build components
         op_icon = "📋" if self.operation == "cp" else "🗑️ "
         pct = f"{progress * 100:5.1f}%"
-        items_str = f"{self.completed_items}/{self.total_items}"
-        size_str = f"{format_size(self.completed_bytes)}/{format_size(self.total_bytes)}"
+        items_str = f"{completed_items}/{total_items}"
+        size_str = f"{format_size(completed_bytes)}/{format_size(total_bytes)}"
 
         # Show elapsed time and speed
         elapsed_str = self._get_elapsed_time()
-        speed_str = format_speed(self.current_speed) if self.current_speed > 0 else "---"
+        speed_str = format_speed(current_speed) if current_speed > 0 else "---"
         time_display = f"{elapsed_str} @ {speed_str}"
 
         # Truncate filename to reasonable length and pad to fixed width
         max_filename_len = 20  # Reduced to make room for time and speed
-        display_name = current_file
+        display_name = display_file
         if len(display_name) > max_filename_len:
             display_name = "..." + display_name[-(max_filename_len-3):]
         else:
@@ -273,8 +295,9 @@ class ProgressBar:
         sys.stdout.flush()
 
     def complete_item(self):
-        """Mark one item as complete."""
-        self.completed_items += 1
+        """Mark one item as complete (thread-safe)."""
+        with self._lock:
+            self.completed_items += 1
 
     def finish(self):
         """Finish progress bar and print summary."""

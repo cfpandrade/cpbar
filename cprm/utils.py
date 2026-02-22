@@ -77,8 +77,10 @@ def format_speed(bytes_per_second: float) -> str:
         return f"{bytes_per_second / 1024:.1f}KB/s"
     elif bytes_per_second < 1024 * 1024 * 1024:
         return f"{bytes_per_second / (1024 * 1024):.1f}MB/s"
-    else:
+    elif bytes_per_second < 1024 * 1024 * 1024 * 1024:
         return f"{bytes_per_second / (1024 * 1024 * 1024):.1f}GB/s"
+    else:
+        return f"{bytes_per_second / (1024 * 1024 * 1024 * 1024):.1f}TB/s"
 
 
 def estimate_operation_time(total_bytes: int, operation: str = 'cp') -> str:
@@ -123,9 +125,26 @@ def validate_destination(path: Path) -> None:
         resolved = path.resolve()
         for critical in critical_paths:
             critical_path = Path(critical)
+            if not critical_path.exists():
+                continue
+            critical_resolved = critical_path.resolve()
+
             # Check if destination is exactly a critical path or inside one
-            if resolved == critical_path or (resolved.is_relative_to(critical_path) if hasattr(resolved, 'is_relative_to') else str(resolved).startswith(str(critical_path))):
+            if resolved == critical_resolved:
                 raise ValueError(f"Cannot write to system directory: {path}")
-    except (OSError, RuntimeError):
-        # If we can't resolve the path, let it through - it will fail later with a better error
-        pass
+
+            # Use is_relative_to if available (Python 3.9+), otherwise use try/except
+            if hasattr(resolved, 'is_relative_to'):
+                if resolved.is_relative_to(critical_resolved):
+                    raise ValueError(f"Cannot write to system directory: {path}")
+            else:
+                try:
+                    resolved.relative_to(critical_resolved)
+                    raise ValueError(f"Cannot write to system directory: {path}")
+                except ValueError:
+                    pass  # Not relative, this is fine
+    except (OSError, RuntimeError) as e:
+        # If we can't resolve the path due to permissions, warn but allow
+        # The operation will fail later with a more specific error
+        import sys
+        print(f"Warning: Could not validate destination path: {e}", file=sys.stderr)

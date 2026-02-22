@@ -106,9 +106,8 @@ def copy_block(src: str, dst: str, offset: int, size: int, block_num: int, progr
             with open(dst, 'r+b') as fdst:
                 fdst.seek(offset)
                 fdst.write(data)
-
-        # Update progress
-        progress.update(os.path.basename(src), len(data))
+            # Update progress inside lock to avoid race conditions
+            progress.update(os.path.basename(src), len(data))
 
     return block_num
 
@@ -171,15 +170,24 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
 
     # Copy blocks in parallel
     write_lock = threading.Lock()
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = []
-        for offset, size, num in blocks:
-            future = executor.submit(copy_block, src, str(dst_path), offset, size, num, progress, write_lock)
-            futures.append(future)
+    try:
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = []
+            for offset, size, num in blocks:
+                future = executor.submit(copy_block, src, str(dst_path), offset, size, num, progress, write_lock)
+                futures.append(future)
 
-        # Wait for all blocks to complete
-        for future in as_completed(futures):
-            future.result()  # This will raise any exceptions that occurred
+            # Wait for all blocks to complete
+            for future in as_completed(futures):
+                future.result()  # This will raise any exceptions that occurred
+    except Exception as e:
+        # Cleanup: remove partially written destination file
+        try:
+            if dst_path.exists():
+                dst_path.unlink()
+        except OSError:
+            pass  # Best effort cleanup
+        raise  # Re-raise the original exception
 
     # Preserve metadata
     shutil.copystat(src, dst_path)
@@ -270,7 +278,9 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
                         filepath = os.path.join(root, filename)
                         try:
                             all_files.append((filepath, os.path.getsize(filepath)))
-                        except (PermissionError, OSError):
+                        except (PermissionError, OSError) as e:
+                            print(f"{Colors.YELLOW}Warning: Cannot access '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
+                            # Still add to list so user knows it was skipped
                             all_files.append((filepath, 0))
             else:
                 print(f"{Colors.RED}Error: '{src}' is a directory. Use -r to copy recursively{Colors.RESET}", file=sys.stderr)
@@ -438,10 +448,16 @@ def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = 
         sys.stdout.write("\r" + " " * 40 + "\r")  # Clear countdown line
         sys.stdout.flush()
 
-        confirm = input(f"{Colors.BOLD}Continue? [y/N]: {Colors.RESET}").strip().lower()
-        if confirm not in ['y', 'yes']:
-            print(f"{Colors.DIM}Operation cancelled{Colors.RESET}")
-            sys.exit(0)
+        # Loop until valid input
+        while True:
+            confirm = input(f"{Colors.BOLD}Continue? [y/N]: {Colors.RESET}").strip().lower()
+            if confirm in ['y', 'yes']:
+                break  # Proceed with deletion
+            elif confirm in ['n', 'no', '']:
+                print(f"{Colors.DIM}Operation cancelled{Colors.RESET}")
+                sys.exit(0)
+            else:
+                print(f"{Colors.RED}Invalid option. Use: y (yes) or n (no){Colors.RESET}")
 
     print(f"{Colors.BLUE}Deleting {total_items} files...{Colors.RESET}")
 
