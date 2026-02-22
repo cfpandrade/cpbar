@@ -1,5 +1,5 @@
 """
-Core functionality and CLI for cprm.
+Core functionality and CLI for cpbar.
 Handles command-line argument parsing and dispatches to appropriate operations.
 
 Author: Carlos Andrade <carlos@perezandrade.com>
@@ -8,6 +8,7 @@ Author: Carlos Andrade <carlos@perezandrade.com>
 import sys
 import argparse
 
+from . import __version__
 from .operations import do_copy, do_remove
 from .benchmark import run_benchmark
 from .utils import get_optimal_workers
@@ -15,26 +16,28 @@ from .ui import Colors
 
 
 def main():
-    """Main entry point for cprm CLI."""
+    """Main entry point for cpbar CLI."""
     parser = argparse.ArgumentParser(
+        prog='cpbar',
         description="Enhanced cp/rm with unified progress bar",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  cprm cp file.txt /destination/
-  cprm cp -r folder/ /destination/
-  cprm cp *.jpg /photos/
-  cprm cp -P large_file.iso /backup/        # Parallel copy with 4 workers
-  cprm cp --parallel=8 large_file.iso /backup/  # Parallel with 8 workers
-  cprm rm file.txt
-  cprm rm -r folder/
-  cprm rm -rf folder/  # No confirmation
+  cpbar cp file.txt /destination/
+  cpbar cp -r folder/ /destination/
+  cpbar cp *.jpg /photos/
+  cpbar cp -P large_file.iso /backup/        # Parallel copy with 4 workers
+  cpbar cp --parallel=8 large_file.iso /backup/  # Parallel with 8 workers
+  cpbar rm file.txt
+  cpbar rm -r folder/
+  cpbar rm -rf folder/  # No confirmation
 
 Author:
   Carlos Andrade <carlos@perezandrade.com>
   https://github.com/cfpandrade/cpbar
         """
     )
+    parser.add_argument('-v', '--version', action='version', version=f'cpbar {__version__}')
 
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
 
@@ -68,7 +71,7 @@ Author:
     # Get optimal workers from config for help text
     optimal = get_optimal_workers()
     cp_parser.add_argument('-P', '--parallel', type=int, nargs='?', const=optimal, default=0, metavar='WORKERS',
-                          help=f'use parallel mode for large files (default: {optimal} workers from benchmark). Optimal: 4-8 for SSDs. Activates automatically for files > 64MB. Run "cprm benchmark" to detect optimal value.')
+                          help=f'use parallel mode for large files (default: {optimal} workers from benchmark). Optimal: 4-8 for SSDs. Activates automatically for files > 64MB. Run "cpbar benchmark" to detect optimal value.')
     cp_parser.add_argument('sources', nargs='+', help='source files or directories to copy')
     cp_parser.add_argument('destination', help='destination path')
 
@@ -77,14 +80,14 @@ Author:
                                             description='Tests different worker counts to determine the optimal configuration for your system.',
                                             epilog="""
 Examples:
-  cprm benchmark              # Run full benchmark with detailed output
-  cprm benchmark --quiet      # Run benchmark with minimal output
+  cpbar benchmark              # Run full benchmark with detailed output
+  cpbar benchmark --quiet      # Run benchmark with minimal output
 
 The benchmark will:
   • Create a temporary 100MB test file
   • Test with 1, 2, 4, 6, and 8 workers
   • Run 3 trials for each configuration
-  • Save the optimal setting to ~/.config/cprm/config.json
+  • Save the optimal setting to ~/.config/cpbar/config.json
   • This setting becomes the default when using -P flag
 
 Author:

@@ -1,5 +1,5 @@
 """
-UI components for cprm.
+UI components for cpbar.
 Handles progress bar, colors, and cursor control.
 
 Author: Carlos Andrade <carlos@perezandrade.com>

@@ -1,5 +1,5 @@
 """
-Benchmark functionality for cprm.
+Benchmark functionality for cpbar.
 Tests different worker counts to determine optimal configuration.
 
 Author: Carlos Andrade <carlos@perezandrade.com>

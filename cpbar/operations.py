@@ -1,5 +1,5 @@
 """
-File operations for cprm.
+File operations for cpbar.
 Handles copy and remove operations with progress tracking.
 
 Author: Carlos Andrade <carlos@perezandrade.com>

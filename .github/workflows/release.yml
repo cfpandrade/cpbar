@@ -18,10 +18,10 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=$(python3 -c "import re; m = re.search(r\"__version__ = '(.+)'\", open('cprm/__init__.py').read()); print(m.group(1))")
+          VERSION=$(python3 -c "import re; m = re.search(r\"__version__ = '(.+)'\", open('cpbar/__init__.py').read()); print(m.group(1))")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          echo "pkg=cprm_${VERSION}_all" >> $GITHUB_OUTPUT
+          echo "pkg=cpbar_${VERSION}_all" >> $GITHUB_OUTPUT
 
       - name: Build .deb package
         run: |
@@ -31,12 +31,12 @@ jobs:
           # Directory structure
           mkdir -p "${PKG}/DEBIAN"
           mkdir -p "${PKG}/usr/bin"
-          mkdir -p "${PKG}/usr/lib/cprm"
+          mkdir -p "${PKG}/usr/lib/cpbar"
           mkdir -p "${PKG}/etc/profile.d"
 
           # DEBIAN/control
           cat > "${PKG}/DEBIAN/control" <<EOF
-          Package: cprm
+          Package: cpbar
           Version: ${VERSION}
           Architecture: all
           Maintainer: Carlos Andrade <carlos@perezandrade.com>
@@ -49,44 +49,44 @@ jobs:
           sed -i 's/^          //' "${PKG}/DEBIAN/control"
 
           # Copy Python package
-          cp -r cprm/. "${PKG}/usr/lib/cprm/"
+          cp -r cpbar/. "${PKG}/usr/lib/cpbar/"
 
-          # Wrapper script at /usr/bin/cprm
-          cat > "${PKG}/usr/bin/cprm" <<'EOF'
+          # Wrapper script at /usr/bin/cpbar
+          cat > "${PKG}/usr/bin/cpbar" <<'EOF'
           #!/usr/bin/env python3
           import sys
           sys.path.insert(0, '/usr/lib')
-          from cprm.core import main
+          from cpbar.core import main
           if __name__ == '__main__':
               main()
           EOF
-          sed -i 's/^          //' "${PKG}/usr/bin/cprm"
-          chmod 755 "${PKG}/usr/bin/cprm"
+          sed -i 's/^          //' "${PKG}/usr/bin/cpbar"
+          chmod 755 "${PKG}/usr/bin/cpbar"
 
-          # /etc/profile.d/cprm.sh — aliases for bash login shells
-          cat > "${PKG}/etc/profile.d/cprm.sh" <<'EOF'
-          # cprm aliases — Enhanced cp/rm with progress bars
+          # /etc/profile.d/cpbar.sh — aliases for bash login shells
+          cat > "${PKG}/etc/profile.d/cpbar.sh" <<'EOF'
+          # cpbar aliases — Enhanced cp/rm with progress bars
           alias cpo='/bin/cp'
           alias rmo='/bin/rm'
-          alias cp='cprm cp'
-          alias rm='cprm rm'
+          alias cp='cpbar cp'
+          alias rm='cpbar rm'
           EOF
-          sed -i 's/^          //' "${PKG}/etc/profile.d/cprm.sh"
+          sed -i 's/^          //' "${PKG}/etc/profile.d/cpbar.sh"
 
           # DEBIAN/postinst
           cat > "${PKG}/DEBIAN/postinst" <<'EOF'
           #!/bin/bash
           set -e
           echo ""
-          echo "✅ cprm installed successfully!"
+          echo "✅ cpbar installed successfully!"
           echo ""
-          echo "Aliases are auto-loaded for bash login shells via /etc/profile.d/cprm.sh"
+          echo "Aliases are auto-loaded for bash login shells via /etc/profile.d/cpbar.sh"
           echo ""
           echo "For zsh, add these lines to ~/.zshrc:"
           echo "  alias cpo='/bin/cp'"
           echo "  alias rmo='/bin/rm'"
-          echo "  alias cp='cprm cp'"
-          echo "  alias rm='cprm rm'"
+          echo "  alias cp='cpbar cp'"
+          echo "  alias rm='cpbar rm'"
           echo ""
           echo "Then reload your shell: source ~/.zshrc"
           EOF
@@ -108,7 +108,7 @@ jobs:
           REPO="${{ github.repository }}"
 
           gh release create "${TAG}" \
-            --title "cprm v${VERSION}" \
+            --title "cpbar v${VERSION}" \
             --notes "## What's new in v${VERSION}
 
           See [commit history](https://github.com/${REPO}/commits/${TAG}) for details.
@@ -125,14 +125,14 @@ jobs:
           \`\`\`
 
           After install, reload your shell or open a new terminal.
-          Bash users get aliases automatically via \`/etc/profile.d/cprm.sh\`.
+          Bash users get aliases automatically via \`/etc/profile.d/cpbar.sh\`.
           Zsh users: add the following to \`~/.zshrc\`:
 
           \`\`\`bash
           alias cpo='/bin/cp'
           alias rmo='/bin/rm'
-          alias cp='cprm cp'
-          alias rm='cprm rm'
+          alias cp='cpbar cp'
+          alias rm='cpbar rm'
           \`\`\`
 
           ### Script install (any distro)
