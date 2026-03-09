@@ -306,6 +306,160 @@ cpbar/
     └── benchmark.py     # Performance benchmarking
 ```
 
+## Troubleshooting
+
+### Progress bar shows garbled characters
+
+**Cause:** Your terminal doesn't support ANSI escape codes, or you're using an old terminal emulator.
+
+**Solution:**
+- Use a modern terminal (iTerm2, Terminal.app, GNOME Terminal, etc.)
+- Update your terminal emulator
+- The tool automatically detects TTY and falls back to simple output in non-interactive mode
+
+### "Permission denied" errors
+
+**Cause:** Insufficient permissions to read source or write to destination.
+
+**Solution:**
+```bash
+# Check file permissions
+ls -la source_file
+
+# Check destination directory permissions
+ls -la /destination/
+
+# Use sudo if necessary (be careful!)
+sudo cpbar cp protected_file.txt /system/location/
+```
+
+### Parallel mode slower than normal mode
+
+**Cause:** Not all systems benefit from parallel I/O. HDDs and network drives may perform worse.
+
+**Solution:**
+```bash
+# Run benchmark to find optimal settings for your system
+cpbar benchmark
+
+# For HDDs, use normal mode (don't use -P)
+cpbar cp large_file.iso /backup/
+
+# Parallel mode is best for: SSD to SSD, NVMe, and files > 1GB
+```
+
+### "File already exists" but no overwrite prompt
+
+**Cause:** Might be running in non-interactive mode (pipe, script, cron) where prompts aren't possible.
+
+**Solution:**
+- Run the command directly in a terminal for interactive prompts
+- Or accept that existing files will be overwritten in batch operations
+
+### Slow performance compared to standard cp
+
+**Cause:** Progress tracking adds minimal overhead, but could be Python startup time for very small files.
+
+**Solution:**
+```bash
+# For single small files, use original cp
+cpo tiny_file.txt dest/
+
+# cpbar shines with large files and directories
+cpbar cp -r huge_folder/ /backup/
+cpbar cp -P multi_gigabyte_file.iso /backup/  # 2-4x faster than cp!
+```
+
+### CI/Tests failing locally
+
+**Cause:** Virtual environment or dependencies issue.
+
+**Solution:**
+```bash
+# Clean setup
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+### Can't install due to "externally-managed-environment"
+
+**Cause:** Modern Python prevents system-wide pip installs to protect the OS.
+
+**Solution:**
+```bash
+# Use the install script (recommended)
+./install.sh
+
+# Or use a virtual environment
+python3 -m venv ~/.cpbar-env
+source ~/.cpbar-env/bin/activate
+pip install cpbar
+```
+
+### Progress bar doesn't show speed/time
+
+**Cause:** Very fast operations (< 100ms) don't have enough data to calculate meaningful speed.
+
+**Solution:** This is normal for small files. Speed tracking works best for operations > 1 second.
+
+### Aliases not working after installation
+
+**Cause:** Shell hasn't reloaded configuration.
+
+**Solution:**
+```bash
+# Reload shell config
+source ~/.bashrc  # or ~/.zshrc
+
+# Or restart your terminal
+
+# Verify aliases
+alias | grep cpbar
+```
+
+### "Module not found" error when running cpbar
+
+**Cause:** Python can't find the cpbar package.
+
+**Solution:**
+```bash
+# Check installation
+which cpbar
+python3 -m cpbar --version
+
+# Reinstall if needed
+./install.sh
+
+# Or verify PATH includes ~/.local/bin
+echo $PATH | grep .local/bin
+```
+
+## Performance Tips
+
+### For Maximum Speed
+
+1. **Use parallel mode for large files (> 1GB):**
+   ```bash
+   cpbar cp -P huge_database.sql /backup/
+   ```
+
+2. **Run benchmark to optimize for your hardware:**
+   ```bash
+   cpbar benchmark
+   # Then use -P for optimal workers
+   ```
+
+3. **SSD to SSD transfers benefit most:**
+   - HDD to HDD: Stick with normal mode
+   - SSD to SSD: Use `-P` or `--parallel=4`
+   - NVMe: Can go up to `--parallel=8`
+
+4. **For many small files, normal mode is best:**
+   - Parallel overhead > benefit for files < 64MB
+
 ## Author
 
 **Carlos Andrade**
