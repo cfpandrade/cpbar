@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include pyproject.toml
+include requirements-dev.txt
+recursive-include cpbar *.py
+recursive-exclude tests *
+recursive-exclude .github *
+exclude install.sh
+exclude a.txt
+exclude b.txt
+exclude test-*.txt
+exclude BACKLOG.md
