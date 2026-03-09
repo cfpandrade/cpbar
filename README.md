@@ -1,5 +1,7 @@
 # cpbar
 
+[![CI](https://github.com/cfpandrade/cpbar/actions/workflows/ci.yml/badge.svg)](https://github.com/cfpandrade/cpbar/actions/workflows/ci.yml)
+
 **cpbar** is a lightweight wrapper for `cp` and `rm` commands that adds a unified, beautiful progress bar to your terminal file operations. It is written in Python and designed to be a drop-in replacement for standard file management commands.
 
 ## Features
