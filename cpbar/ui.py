@@ -2,6 +2,12 @@
 UI components for cpbar.
 Handles progress bar, colors, and cursor control.
 
+TTY Detection:
+- Automatically detects if running in an interactive terminal (TTY)
+- In TTY mode: Shows interactive progress bar with ANSI colors and cursor control
+- In non-TTY mode: Falls back to simple line-based output (e.g., in pipes, cronjobs, scripts)
+- No ANSI escape codes are printed when not in a TTY
+
 Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
@@ -19,39 +25,48 @@ from .utils import (
 )
 
 
-# ANSI escape codes for styling
+# Detect if we're running in a TTY
+IS_TTY = sys.stdout.isatty()
+
+
+# ANSI escape codes for styling (empty if not TTY)
 class Colors:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    GREEN = "\033[32m"
-    BLUE = "\033[34m"
-    CYAN = "\033[36m"
-    YELLOW = "\033[33m"
-    RED = "\033[31m"
-    DIM = "\033[2m"
+    RESET = "\033[0m" if IS_TTY else ""
+    BOLD = "\033[1m" if IS_TTY else ""
+    GREEN = "\033[32m" if IS_TTY else ""
+    BLUE = "\033[34m" if IS_TTY else ""
+    CYAN = "\033[36m" if IS_TTY else ""
+    YELLOW = "\033[33m" if IS_TTY else ""
+    RED = "\033[31m" if IS_TTY else ""
+    DIM = "\033[2m" if IS_TTY else ""
 
 
-# ANSI escape codes for cursor/screen control
+# ANSI escape codes for cursor/screen control (empty if not TTY)
 class Cursor:
-    SAVE = "\033[s"
-    RESTORE = "\033[u"
-    HIDE = "\033[?25l"
-    SHOW = "\033[?25h"
+    SAVE = "\033[s" if IS_TTY else ""
+    RESTORE = "\033[u" if IS_TTY else ""
+    HIDE = "\033[?25l" if IS_TTY else ""
+    SHOW = "\033[?25h" if IS_TTY else ""
 
     @staticmethod
     def move_to(row: int, col: int = 1) -> str:
-        return f"\033[{row};{col}H"
+        if IS_TTY:
+            return f"\033[{row};{col}H"
+        return ""
 
     @staticmethod
     def move_to_bottom() -> str:
         """Move cursor to last line of terminal."""
-        rows = shutil.get_terminal_size().lines
-        return f"\033[{rows};1H"
+        if IS_TTY:
+            rows = shutil.get_terminal_size().lines
+            return f"\033[{rows};1H"
+        return ""
 
 
 class ProgressBar:
     """A single progress bar that tracks total progress across all files.
     Always displays at the bottom of the terminal and adapts to terminal width.
+    In non-TTY mode, falls back to simple line-based progress updates.
     """
 
     def __init__(self, total_items: int, total_bytes: int, operation: str):
@@ -65,6 +80,7 @@ class ProgressBar:
         self.started = False
         self.overwrite_all = False  # Track if user chose "overwrite all"
         self.skipped_items = 0
+        self.is_tty = IS_TTY
 
         # Time estimation
         self.start_time = time.time()
@@ -79,7 +95,8 @@ class ProgressBar:
 
         # Handle Ctrl+C gracefully
         signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGWINCH, self._resize_handler)
+        if self.is_tty:
+            signal.signal(signal.SIGWINCH, self._resize_handler)
 
     def _signal_handler(self, signum, frame):
         self.interrupted = True
@@ -203,12 +220,19 @@ class ProgressBar:
 
     def update(self, current_file: str, bytes_delta: int = 0):
         """Update progress bar with current state (thread-safe)."""
-        self._setup()
-
         with self._lock:
             self.current_file = current_file
             self.completed_bytes += bytes_delta
 
+        if self.is_tty:
+            self._update_tty_display()
+        # Non-TTY mode: updates happen in complete_item()
+
+    def _update_tty_display(self):
+        """Update progress bar display in TTY mode (interactive terminal)."""
+        self._setup()
+
+        with self._lock:
             # Calculate speed (with smoothing)
             current_time = time.time()
             time_delta = current_time - self.last_update_time
@@ -298,6 +322,13 @@ class ProgressBar:
         """Mark one item as complete (thread-safe)."""
         with self._lock:
             self.completed_items += 1
+            
+            # In non-TTY mode, print simple progress updates
+            if not self.is_tty:
+                op_name = "Copied" if self.operation == "cp" else "Deleted"
+                progress_pct = (self.completed_items / self.total_items * 100) if self.total_items > 0 else 100
+                print(f"{op_name} [{self.completed_items}/{self.total_items}] ({progress_pct:.1f}%) {self.current_file}")
+                sys.stdout.flush()
 
     def finish(self):
         """Finish progress bar and print summary."""
@@ -318,21 +349,23 @@ class ProgressBar:
                 config[key] = speeds
                 save_config(config)
 
-        cols, rows = self._get_terminal_size()
-
-        # Clear the progress bar line
-        sys.stdout.write(Cursor.move_to_bottom())
-        sys.stdout.write("\033[2K")
-
         # Print summary
         op_name = "Copied" if self.operation == "cp" else "Deleted"
         icon = "✅" if self.operation == "cp" else "🗑️ "
-        summary = f"{icon} {Colors.GREEN}{op_name}: {self.completed_items} files ({format_size(self.completed_bytes)}){Colors.RESET}"
+        summary = f"{icon} {op_name}: {self.completed_items} files ({format_size(self.completed_bytes)})"
 
         if self.skipped_items > 0:
-            summary += f" {Colors.YELLOW}(Skipped: {self.skipped_items}){Colors.RESET}"
+            summary += f" (Skipped: {self.skipped_items})"
 
-        sys.stdout.write(summary)
-        # Don't add extra newline - the shell prompt will handle spacing
+        if self.is_tty:
+            cols, rows = self._get_terminal_size()
+            # Clear the progress bar line
+            sys.stdout.write(Cursor.move_to_bottom())
+            sys.stdout.write("\033[2K")
+            sys.stdout.write(summary)
+            # Don't add extra newline - the shell prompt will handle spacing
+        else:
+            # In non-TTY mode, just print the summary
+            print(summary)
 
         self._cleanup()
