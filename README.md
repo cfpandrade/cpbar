@@ -29,6 +29,11 @@
   - `rm -f` skips confirmation (like standard `rm`).
 - **Drop-in Replacement**: Installs aliases so you can keep using `cp` and `rm` as usual.
 - **Original Commands**: Provides `cpo` and `rmo` aliases if you need the original system commands.
+- **Non-TTY/Script Compatibility**:
+  - Automatically detects if running in a TTY (interactive terminal)
+  - Falls back to simple line-based output when used in pipes, scripts, or cronjobs
+  - No ANSI escape codes are printed in non-interactive mode
+  - Works seamlessly in automation contexts
 
 ## Installation
 
@@ -215,6 +220,44 @@ cp -P large_file.iso /backup/
 - Saves the result to `~/.config/cpbar/config.json`
 
 **Note:** The installer optionally runs the benchmark automatically during installation. You can re-run it anytime if you upgrade your hardware or move to a different system.
+
+### Using in Scripts, Pipes, and Cronjobs
+
+`cpbar` automatically detects when it's not running in an interactive terminal (e.g., in pipes, scripts, or cronjobs) and switches to a simplified output mode:
+
+**Interactive mode (TTY):**
+```bash
+# Beautiful progress bar with colors and animations
+$ cpbar cp large_file.iso /backup/
+📋  45.2% [████████████░░░░░░░░░░░░░] 1/1 | 2.1GB/4.6GB | 3m 15s @ 11.2MB/s | large_file.iso
+```
+
+**Non-interactive mode (no TTY):**
+```bash
+# Simple line-based output, no ANSI codes
+$ cpbar cp file.txt /backup/ | tee log.txt
+Copying 1 files (13.0B)...
+Copied [1/1] (100.0%) file.txt
+✅ Copied: 1 files (13.0B)
+
+# In a script
+#!/bin/bash
+cpbar cp data.tar.gz /backup/  # Works seamlessly
+
+# In a cronjob
+0 2 * * * cpbar rm -rf /tmp/old_backups  # Clean output for logs
+
+# Piped with other commands
+find . -name '*.log' | xargs cpbar rm
+```
+
+**What changes in non-TTY mode:**
+- No ANSI escape codes or cursor control
+- Simple line-based progress updates instead of animated progress bar
+- One line per completed file instead of continuously updating display
+- All functionality works identically (dry-run, parallel, confirmation prompts, etc.)
+
+This makes `cpbar` perfect for automation while still providing progress tracking in logs!
 
 ### Using Original Commands
 
