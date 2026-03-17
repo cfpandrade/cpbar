@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/cfpandrade/cpbar/actions/workflows/ci.yml/badge.svg)](https://github.com/cfpandrade/cpbar/actions/workflows/ci.yml)
 
-**cpbar** is a lightweight wrapper for `cp` and `rm` commands that adds a unified, beautiful progress bar to your terminal file operations. It is written in Python and designed to be a drop-in replacement for standard file management commands.
+**cpbar** is a lightweight wrapper for `cp`, `mv`, and `rm` commands that adds a unified, beautiful progress bar to your terminal file operations. It is written in Python and designed to be a drop-in replacement for standard file management commands.
 
 ## Features
 
@@ -22,15 +22,16 @@
   - Automatically activates for files > 64MB when enabled
   - Configurable worker count (optimal: 4-8 for SSDs)
   - Auto-benchmark to detect optimal settings for your system
-- **Recursive Support**: Fully supports recursive copy (`cp -r`) and remove (`rm -r`).
+- **Move Support**: Full support for moving files and directories (`mv`) with progress tracking.
+- **Recursive Support**: Fully supports recursive copy (`cp -r`), move (`mv`), and remove (`rm -r`).
 - **Smart Overwrite Handling**:
   - Prompts when destination files exist with options: yes (y), no (n), all (a), quit (q).
   - All prompts appear in the same line for a clean interface.
 - **Safety First**:
   - `rm` asks for confirmation by default with a 3-second safety countdown.
   - `rm -f` skips confirmation (like standard `rm`).
-- **Drop-in Replacement**: Installs aliases so you can keep using `cp` and `rm` as usual.
-- **Original Commands**: Provides `cpo` and `rmo` aliases if you need the original system commands.
+- **Drop-in Replacement**: Installs aliases so you can keep using `cp`, `mv`, and `rm` as usual.
+- **Original Commands**: Provides `cpo`, `mvo`, and `rmo` aliases if you need the original system commands.
 - **Non-TTY/Script Compatibility**:
   - Automatically detects if running in a TTY (interactive terminal)
   - Falls back to simple line-based output when used in pipes, scripts, or cronjobs
@@ -54,8 +55,10 @@ Zsh users: add these lines to `~/.zshrc` and reload:
 
 ```bash
 alias cpo='/bin/cp'
+alias mvo='/bin/mv'
 alias rmo='/bin/rm'
 alias cp='cpbar cp'
+alias mv='cpbar mv'
 alias rm='cpbar rm'
 ```
 
@@ -84,7 +87,7 @@ source ~/.zshrc  # or source ~/.bashrc
 
 ## Usage
 
-Once installed, you can use `cp` and `rm` normally, and they will now show progress bars!
+Once installed, you can use `cp`, `mv`, and `rm` normally, and they will now show progress bars!
 
 ### Copying Files
 
@@ -106,6 +109,28 @@ cp -P large_file.iso /backup/                # Use auto-detected optimal workers
 cp --parallel=4 large_file.iso /backup/      # Or specify workers manually
 cp --parallel=8 huge_database.sql /backup/   # More workers for very large files
 ```
+
+### Moving Files
+
+```bash
+# Move a single file
+mv document.pdf /archive/
+
+# Move a directory
+mv old_project/ /archive/old_project/
+
+# Move multiple files
+mv *.log /logs/archive/
+
+# Dry-run: preview what would be moved
+mv -n -r old_project/ /archive/
+
+# Parallel move for large files (2-4x faster on SSDs across filesystems)
+mv -P large_video.mkv /external_drive/    # Use auto-detected optimal workers
+mv --parallel=4 database.sql /backup/     # Or specify workers manually
+```
+
+**Note**: When moving files within the same filesystem, `mv` uses instant rename operations. When moving across filesystems, it copies and then deletes the source (showing progress).
 
 ### Removing Files
 

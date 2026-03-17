@@ -11,11 +11,13 @@ import shutil
 import time
 import threading
 import subprocess
+import termios
+import tty
 from pathlib import Path
 from typing import List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .ui import ProgressBar, Colors
+from .ui import ProgressBar, Colors, getch
 from .utils import (
     format_size, estimate_operation_time, is_system_directory,
     BUFFER_SIZE, BLOCK_SIZE, PARALLEL_THRESHOLD
@@ -388,6 +390,224 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
     progress.finish()
 
 
+def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool = False, parallel: int = 0):
+    """Execute move operation with progress bar.
+
+    Args:
+        sources: List of source file/directory paths
+        destination: Destination path
+        recursive: Whether to move directories recursively (implied for directories)
+        dry_run: Preview mode without moving
+        parallel: Number of parallel workers for large files (0 = disabled)
+    """
+    # Validate inputs
+    if not sources:
+        print(f"{Colors.RED}Error: No source files specified{Colors.RESET}", file=sys.stderr)
+        sys.exit(1)
+
+    dst_path = Path(destination)
+
+    # Fall back to native /bin/mv for system directories
+    if is_system_directory(dst_path):
+        print(f"{Colors.DIM}System directory detected, using /bin/mv...{Colors.RESET}")
+        cmd = ['/bin/mv']
+        cmd.extend(sources)
+        cmd.append(destination)
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
+    # If multiple sources, destination must be a directory
+    if len(sources) > 1 and not dst_path.is_dir():
+        if not dst_path.exists():
+            if not dry_run:
+                dst_path.mkdir(parents=True)
+        else:
+            print(f"{Colors.RED}Error: Destination must be a directory for multiple sources{Colors.RESET}", file=sys.stderr)
+            sys.exit(1)
+
+    # Collect all files to move
+    all_files = []
+    dirs_to_process = []
+
+    for src in sources:
+        src_path = Path(src)
+        if not src_path.exists():
+            print(f"{Colors.RED}Error: '{src}' does not exist{Colors.RESET}", file=sys.stderr)
+            continue
+
+        if src_path.is_file():
+            all_files.append((str(src_path), src_path.stat().st_size))
+        elif src_path.is_dir():
+            # For directories, collect all files recursively
+            dirs_to_process.append(src_path)
+            for root, _, files in os.walk(str(src_path)):
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    try:
+                        all_files.append((filepath, os.path.getsize(filepath)))
+                    except (PermissionError, OSError) as e:
+                        print(f"{Colors.YELLOW}Warning: Cannot access '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
+                        all_files.append((filepath, 0))
+
+    if not all_files:
+        print(f"{Colors.RED}Error: No files to move{Colors.RESET}", file=sys.stderr)
+        sys.exit(1)
+
+    total_bytes = sum(size for _, size in all_files)
+    total_items = len(all_files)
+
+    # Dry-run mode: just show what would be moved
+    if dry_run:
+        size_str = format_size(total_bytes)
+        estimated_time = estimate_operation_time(total_bytes, 'mv')
+
+        print(f"{Colors.CYAN}🔍 Dry-run mode - No files will be moved{Colors.RESET}\n")
+        print(f"{Colors.BOLD}Summary:{Colors.RESET}")
+        print(f"  Files to move: {Colors.GREEN}{total_items}{Colors.RESET}")
+        print(f"  Total size: {Colors.GREEN}{size_str}{Colors.RESET}")
+        print(f"  Estimated time: {Colors.YELLOW}~{estimated_time}{Colors.RESET}")
+        print(f"  Destination: {Colors.BLUE}{destination}{Colors.RESET}\n")
+
+        # Show first 10 files as preview
+        print(f"{Colors.BOLD}Files (showing first 10):{Colors.RESET}")
+        for filepath, size in all_files[:10]:
+            rel_path = os.path.relpath(filepath)
+            print(f"  {Colors.DIM}→{Colors.RESET} {rel_path} {Colors.DIM}({format_size(size)}){Colors.RESET}")
+
+        if len(all_files) > 10:
+            print(f"  {Colors.DIM}... and {len(all_files) - 10} more files{Colors.RESET}")
+
+        return
+
+    print(f"{Colors.BLUE}Moving {total_items} files ({format_size(total_bytes)})...{Colors.RESET}")
+
+    progress = ProgressBar(total_items, total_bytes, "mv")
+
+    # Check if source and destination are on the same filesystem
+    # If so, we can use rename for instant moves
+    same_fs = {}
+    for src in sources:
+        src_path = Path(src)
+        if src_path.exists():
+            try:
+                src_stat = src_path.stat()
+                dst_stat = dst_path.stat() if dst_path.exists() else dst_path.parent.stat()
+                same_fs[str(src_path)] = (src_stat.st_dev == dst_stat.st_dev)
+            except (PermissionError, OSError):
+                same_fs[str(src_path)] = False
+
+    # Move files
+    for src_file, file_size in all_files:
+        src_file_path = Path(src_file)
+
+        # Determine if this file is part of a directory being moved
+        is_in_dir = False
+        parent_dir = None
+        for dir_path in dirs_to_process:
+            try:
+                if hasattr(src_file_path, 'is_relative_to'):
+                    if src_file_path.is_relative_to(dir_path):
+                        is_in_dir = True
+                        parent_dir = dir_path
+                        break
+                else:
+                    try:
+                        src_file_path.relative_to(dir_path)
+                        is_in_dir = True
+                        parent_dir = dir_path
+                        break
+                    except ValueError:
+                        pass
+            except (ValueError, TypeError):
+                pass
+
+        if is_in_dir and parent_dir:
+            # File is part of a directory - move with directory structure
+            try:
+                rel_path = src_file_path.relative_to(parent_dir)
+                dst_file = dst_path / parent_dir.name / rel_path
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+
+                # Check if destination file already exists
+                if dst_file.exists():
+                    if not progress.ask_overwrite(str(dst_file)):
+                        progress.complete_item()
+                        continue
+
+                # Try rename first (instant if same filesystem)
+                parent_key = str(parent_dir)
+                if parent_key in same_fs and same_fs[parent_key]:
+                    try:
+                        src_file_path.rename(dst_file)
+                        progress.update(src_file_path.name, file_size)
+                        progress.complete_item()
+                        continue
+                    except OSError:
+                        # Rename failed, fall back to copy+delete
+                        pass
+
+                # Fall back to copy + delete
+                if parallel > 0 and file_size > PARALLEL_THRESHOLD:
+                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel):
+                        os.remove(src_file)
+                        progress.complete_item()
+                else:
+                    if copy_file_with_progress(src_file, str(dst_file), progress):
+                        os.remove(src_file)
+                        progress.complete_item()
+            except (PermissionError, OSError) as e:
+                print(f"\n{Colors.YELLOW}Warning: Could not move '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+        else:
+            # Individual file - move directly
+            try:
+                # Handle destination being a directory
+                if dst_path.is_dir():
+                    dst_file = dst_path / src_file_path.name
+                else:
+                    dst_file = dst_path
+
+                # Check if destination file already exists
+                if dst_file.exists():
+                    if not progress.ask_overwrite(str(dst_file)):
+                        progress.complete_item()
+                        continue
+
+                # Try rename first (instant if same filesystem)
+                src_key = str(src_file_path)
+                if src_key in same_fs and same_fs[src_key]:
+                    try:
+                        src_file_path.rename(dst_file)
+                        progress.update(src_file_path.name, file_size)
+                        progress.complete_item()
+                        continue
+                    except OSError:
+                        # Rename failed, fall back to copy+delete
+                        pass
+
+                # Fall back to copy + delete
+                if parallel > 0 and file_size > PARALLEL_THRESHOLD:
+                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel):
+                        os.remove(src_file)
+                        progress.complete_item()
+                else:
+                    if copy_file_with_progress(src_file, str(dst_file), progress):
+                        os.remove(src_file)
+                        progress.complete_item()
+            except (PermissionError, OSError) as e:
+                print(f"\n{Colors.YELLOW}Warning: Could not move '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+
+    # Remove empty source directories
+    for dir_path in reversed(dirs_to_process):
+        try:
+            # Only remove if empty
+            if dir_path.exists() and not any(dir_path.iterdir()):
+                dir_path.rmdir()
+        except (PermissionError, OSError):
+            pass  # Directory not empty or can't remove, that's OK
+
+    progress.finish()
+
+
 def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = False):
     """Execute remove operation with progress bar."""
     if not targets:
@@ -445,24 +665,48 @@ def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = 
         print(f"{Colors.YELLOW}Will delete {total_items} files ({format_size(total_bytes)}){Colors.RESET}")
 
         # 3-second countdown before allowing confirmation
-        for i in range(3, 0, -1):
-            sys.stdout.write(f"\r{Colors.DIM}Wait {i}s before confirming...{Colors.RESET}  ")
-            sys.stdout.flush()
-            time.sleep(1)
+        # Disable terminal echo during countdown to suppress visual noise
+        fd = sys.stdin.fileno()
+        old_settings = None
+        try:
+            # Save current terminal settings
+            old_settings = termios.tcgetattr(fd)
+            # Disable echo
+            new_settings = termios.tcgetattr(fd)
+            new_settings[3] = new_settings[3] & ~termios.ECHO  # lflags
+            termios.tcsetattr(fd, termios.TCSADRAIN, new_settings)
+        except (termios.error, AttributeError, OSError):
+            # Not a TTY or termios not available, continue without echo suppression
+            pass
+
+        try:
+            for i in range(3, 0, -1):
+                sys.stdout.write(f"\r{Colors.DIM}Wait {i}s before confirming...{Colors.RESET}  ")
+                sys.stdout.flush()
+                time.sleep(1)
+        finally:
+            # Restore terminal settings
+            if old_settings is not None:
+                try:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                except (termios.error, OSError):
+                    pass
 
         sys.stdout.write("\r" + " " * 40 + "\r")  # Clear countdown line
         sys.stdout.flush()
 
-        # Loop until valid input
-        while True:
-            confirm = input(f"{Colors.BOLD}Continue? [y/N]: {Colors.RESET}").strip().lower()
-            if confirm in ['y', 'yes']:
-                break  # Proceed with deletion
-            elif confirm in ['n', 'no', '']:
-                print(f"{Colors.DIM}Operation cancelled{Colors.RESET}")
-                sys.exit(0)
-            else:
-                print(f"{Colors.RED}Invalid option. Use: y (yes) or n (no){Colors.RESET}")
+        # Prompt for confirmation - only accepts y or n (Enter defaults to n)
+        sys.stdout.write(f"{Colors.BOLD}Continue? [y/N]: {Colors.RESET}")
+        sys.stdout.flush()
+        
+        confirm = getch("yn\r\n")  # Accept y, n, or Enter
+        
+        if confirm == 'y':
+            print()  # Newline after single char input
+        elif confirm in ['n', '\r', '\n']:
+            print()  # Newline
+            print(f"{Colors.DIM}Operation cancelled{Colors.RESET}")
+            sys.exit(0)
 
     print(f"{Colors.BLUE}Deleting {total_items} files...{Colors.RESET}")
 

@@ -16,6 +16,8 @@ import shutil
 import signal
 import time
 import threading
+import termios
+import tty
 from typing import Tuple
 
 from .utils import (
@@ -61,6 +63,44 @@ class Cursor:
             rows = shutil.get_terminal_size().lines
             return f"\033[{rows};1H"
         return ""
+
+
+def getch(valid_keys: str) -> str:
+    """Read a single character from stdin, blocking until a valid key is pressed.
+    Only accepts characters in valid_keys (case-insensitive).
+    Returns the lowercase character.
+    
+    Args:
+        valid_keys: String of valid characters (e.g., "ynaq")
+    
+    Returns:
+        Single lowercase character from valid_keys
+    """
+    if not IS_TTY:
+        # Fallback to regular input in non-TTY mode
+        while True:
+            response = input().strip().lower()
+            if response and response[0] in valid_keys.lower():
+                return response[0]
+    
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            char = sys.stdin.read(1).lower()
+            # Handle Ctrl+C
+            if char == '\x03':
+                raise KeyboardInterrupt
+            # Only accept valid keys
+            if char in valid_keys.lower():
+                # Echo the character
+                sys.stdout.write(char)
+                sys.stdout.flush()
+                return char
+            # Ignore invalid keys silently
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 class ProgressBar:
@@ -148,54 +188,48 @@ class ProgressBar:
         # Show cursor for input
         sys.stdout.write(Cursor.SHOW)
 
-        while True:
-            # Move to the same line each time
+        # Move to the same line
+        sys.stdout.write(Cursor.move_to(rows - 1, 1))
+        sys.stdout.write("\033[2K")  # Clear line
+        sys.stdout.flush()
+
+        # Use sys.stdout.write + getch to control positioning
+        sys.stdout.write(f"{Colors.YELLOW}Overwrite '{filepath}'? [y/n/a/q]: {Colors.RESET}")
+        sys.stdout.flush()
+        
+        # Read single character, only accepting valid keys
+        response = getch("ynaq")
+
+        if response == 'y':
+            # Clear the prompt line
             sys.stdout.write(Cursor.move_to(rows - 1, 1))
-            sys.stdout.write("\033[2K")  # Clear line
+            sys.stdout.write("\033[2K")
             sys.stdout.flush()
-
-            # Use sys.stdout.write + input to control positioning
-            sys.stdout.write(f"{Colors.YELLOW}Overwrite '{filepath}'? [y/n/a/q]: {Colors.RESET}")
+            # Hide cursor again
+            sys.stdout.write(Cursor.HIDE)
+            return True
+        elif response == 'n':
+            self.skipped_items += 1
+            # Clear the prompt line
+            sys.stdout.write(Cursor.move_to(rows - 1, 1))
+            sys.stdout.write("\033[2K")
             sys.stdout.flush()
-            response = input().strip().lower()
-
-            if response in ['y', 'yes']:
-                # Clear the prompt line
-                sys.stdout.write(Cursor.move_to(rows - 1, 1))
-                sys.stdout.write("\033[2K")
-                sys.stdout.flush()
-                # Hide cursor again
-                sys.stdout.write(Cursor.HIDE)
-                return True
-            elif response in ['n', 'no']:
-                self.skipped_items += 1
-                # Clear the prompt line
-                sys.stdout.write(Cursor.move_to(rows - 1, 1))
-                sys.stdout.write("\033[2K")
-                sys.stdout.flush()
-                # Hide cursor again
-                sys.stdout.write(Cursor.HIDE)
-                return False
-            elif response in ['a', 'all']:
-                self.overwrite_all = True
-                # Clear the prompt line
-                sys.stdout.write(Cursor.move_to(rows - 1, 1))
-                sys.stdout.write("\033[2K")
-                sys.stdout.flush()
-                # Hide cursor again
-                sys.stdout.write(Cursor.HIDE)
-                return True
-            elif response in ['q', 'quit']:
-                self._cleanup()
-                print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
-                sys.exit(0)
-            else:
-                # Show error on the same line
-                sys.stdout.write(Cursor.move_to(rows - 1, 1))
-                sys.stdout.write("\033[2K")
-                sys.stdout.write(f"{Colors.RED}Invalid option. Use: y (yes), n (no), a (all), q (quit){Colors.RESET}")
-                sys.stdout.flush()
-                time.sleep(1.5)  # Show error briefly before re-prompting
+            # Hide cursor again
+            sys.stdout.write(Cursor.HIDE)
+            return False
+        elif response == 'a':
+            self.overwrite_all = True
+            # Clear the prompt line
+            sys.stdout.write(Cursor.move_to(rows - 1, 1))
+            sys.stdout.write("\033[2K")
+            sys.stdout.flush()
+            # Hide cursor again
+            sys.stdout.write(Cursor.HIDE)
+            return True
+        elif response == 'q':
+            self._cleanup()
+            print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
+            sys.exit(0)
 
     def _clear_line(self):
         """Clear the current line."""
@@ -278,7 +312,12 @@ class ProgressBar:
             progress = completed_items / total_items if total_items > 0 else 1.0
 
         # Build components
-        op_icon = "📋" if self.operation == "cp" else "🗑️ "
+        if self.operation == "cp":
+            op_icon = "📋"
+        elif self.operation == "mv":
+            op_icon = "🚚"
+        else:
+            op_icon = "🗑️ "
         pct = f"{progress * 100:5.1f}%"
         items_str = f"{completed_items}/{total_items}"
         size_str = f"{format_size(completed_bytes)}/{format_size(total_bytes)}"
@@ -325,7 +364,12 @@ class ProgressBar:
             
             # In non-TTY mode, print simple progress updates
             if not self.is_tty:
-                op_name = "Copied" if self.operation == "cp" else "Deleted"
+                if self.operation == "cp":
+                    op_name = "Copied"
+                elif self.operation == "mv":
+                    op_name = "Moved"
+                else:
+                    op_name = "Deleted"
                 progress_pct = (self.completed_items / self.total_items * 100) if self.total_items > 0 else 100
                 print(f"{op_name} [{self.completed_items}/{self.total_items}] ({progress_pct:.1f}%) {self.current_file}")
                 sys.stdout.flush()
@@ -341,7 +385,12 @@ class ProgressBar:
 
                 # Save to config for future estimates
                 config = load_config()
-                key = 'copy_speeds_mbps' if self.operation == 'cp' else 'delete_speeds_mbps'
+                if self.operation == 'cp':
+                    key = 'copy_speeds_mbps'
+                elif self.operation == 'mv':
+                    key = 'move_speeds_mbps'
+                else:
+                    key = 'delete_speeds_mbps'
                 speeds = config.get(key, [])
                 speeds.append(speed_mbps)
                 # Keep only last 10 observations to prevent unbounded growth
@@ -350,8 +399,15 @@ class ProgressBar:
                 save_config(config)
 
         # Print summary
-        op_name = "Copied" if self.operation == "cp" else "Deleted"
-        icon = "✅" if self.operation == "cp" else "🗑️ "
+        if self.operation == "cp":
+            op_name = "Copied"
+            icon = "✅"
+        elif self.operation == "mv":
+            op_name = "Moved"
+            icon = "✅"
+        else:
+            op_name = "Deleted"
+            icon = "🗑️ "
         summary = f"{icon} {op_name}: {self.completed_items} files ({format_size(self.completed_bytes)})"
 
         if self.skipped_items > 0:

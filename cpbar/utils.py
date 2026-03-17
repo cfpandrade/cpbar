@@ -89,7 +89,7 @@ def estimate_operation_time(total_bytes: int, operation: str = 'cp') -> str:
 
     Args:
         total_bytes: Total bytes to process
-        operation: 'cp' for copy or 'rm' for remove
+        operation: 'cp' for copy, 'mv' for move, or 'rm' for remove
 
     Returns:
         Formatted time string
@@ -98,8 +98,15 @@ def estimate_operation_time(total_bytes: int, operation: str = 'cp') -> str:
         return "< 1s"
 
     config = load_config()
-    key = 'copy_speeds_mbps' if operation == 'cp' else 'delete_speeds_mbps'
-    default_speed = 100 if operation == 'cp' else 200
+    if operation == 'cp':
+        key = 'copy_speeds_mbps'
+        default_speed = 100
+    elif operation == 'mv':
+        key = 'move_speeds_mbps'
+        default_speed = 100
+    else:
+        key = 'delete_speeds_mbps'
+        default_speed = 200
 
     learned_speeds = config.get(key, [])
     avg_speed_mbps = sum(learned_speeds) / len(learned_speeds) if learned_speeds else default_speed
