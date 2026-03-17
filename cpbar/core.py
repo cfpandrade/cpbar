@@ -9,7 +9,7 @@ import sys
 import argparse
 
 from . import __version__
-from .operations import do_copy, do_remove
+from .operations import do_copy, do_remove, do_move
 from .benchmark import run_benchmark
 from .utils import get_optimal_workers
 from .ui import Colors
@@ -17,6 +17,16 @@ from .ui import Colors
 
 def main():
     """Main entry point for cpbar CLI."""
+    try:
+        _main()
+    except KeyboardInterrupt:
+        # Clean exit on Ctrl+C without traceback
+        print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
+        sys.exit(130)  # Standard exit code for SIGINT
+
+
+def _main():
+    """Internal main function."""
     parser = argparse.ArgumentParser(
         prog='cpbar',
         description="Enhanced cp/rm with unified progress bar",
@@ -98,6 +108,38 @@ Author:
     benchmark_parser.add_argument('-q', '--quiet', action='store_true',
                                  help='minimal output, only show final result')
 
+    # Move subcommand
+    mv_parser = subparsers.add_parser('mv', help='Move files with progress bar',
+                                     description='Move files and directories with a unified progress bar, speed tracking, and optional parallel mode for large files.',
+                                     epilog="""
+Examples:
+  mv file.txt /destination/              # Move single file
+  mv -r folder/ /destination/            # Move directory recursively
+  mv -n large_folder/ /backup/           # Dry-run: preview before moving
+  mv --parallel=4 large.iso /backup/     # Fast parallel move (4 workers)
+  mv *.mkv /backup/                      # Move multiple files
+
+Performance tips:
+  • Use --parallel for files > 64MB on SSDs (2-4x faster)
+  • Optimal workers: 4-8 for most systems
+  • Shows real-time speed (MB/s) during transfer
+  • 16MB buffer for efficient operations
+
+Author:
+  Carlos Andrade <carlos@perezandrade.com>
+  https://github.com/cfpandrade/cpbar
+                                     """,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    mv_parser.add_argument('-r', '-R', '--recursive', action='store_true',
+                          help='move directories recursively (implied for directories)')
+    mv_parser.add_argument('-n', '--dry-run', action='store_true',
+                          help='preview what would be moved without actually moving (shows file count, size, and estimated time)')
+
+    mv_parser.add_argument('-P', '--parallel', type=int, nargs='?', const=optimal, default=0, metavar='WORKERS',
+                          help=f'use parallel mode for large files (default: {optimal} workers from benchmark). Optimal: 4-8 for SSDs. Activates automatically for files > 64MB. Run "cpbar benchmark" to detect optimal value.')
+    mv_parser.add_argument('sources', nargs='+', help='source files or directories to move')
+    mv_parser.add_argument('destination', help='destination path')
+
     # Remove subcommand
     rm_parser = subparsers.add_parser('rm', help='Remove files with progress bar',
                                      description='Remove files and directories with a unified progress bar, speed tracking, and safety confirmations.',
@@ -139,6 +181,12 @@ Author:
             print(f"{Colors.RED}Error: At least one source file and a destination required{Colors.RESET}", file=sys.stderr)
             sys.exit(1)
         do_copy(args.sources, args.destination, args.recursive, args.dry_run, args.parallel)
+
+    elif args.command == 'mv':
+        if len(args.sources) < 1:
+            print(f"{Colors.RED}Error: At least one source file and a destination required{Colors.RESET}", file=sys.stderr)
+            sys.exit(1)
+        do_move(args.sources, args.destination, args.recursive, args.dry_run, args.parallel)
 
     elif args.command == 'rm':
         do_remove(args.targets, args.recursive, args.force, args.dry_run)
