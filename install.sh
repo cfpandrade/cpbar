@@ -60,12 +60,14 @@ echo "✅ Script installed to $INSTALL_DIR/$SCRIPT_NAME"
 
 # Alias block to add
 ALIAS_BLOCK='
-# cpbar aliases - Enhanced cp/rm with progress bars
+# cpbar aliases - Enhanced cp/mv/rm with progress bars
 # Original commands (use these to bypass progress bars)
 alias cpo="cp"
+alias mvo="mv"
 alias rmo="rm"
-# Replace cp/rm with enhanced versions
+# Replace cp/mv/rm with enhanced versions
 alias cp="cpbar cp"
+alias mv="cpbar mv"
 alias rm="cpbar rm"
 '
 
@@ -190,5 +192,6 @@ echo "  cpbar benchmark    Detect optimal parallel workers for your system"
 echo ""
 echo "Original commands (no progress bar):"
 echo "  cpo file.txt /destination/         # Original cp"
+echo "  mvo file.txt /destination/         # Original mv"
 echo "  rmo file.txt                       # Original rm"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
