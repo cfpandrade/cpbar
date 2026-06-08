@@ -5,6 +5,7 @@ Handles configuration management and formatting functions.
 Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Tuple
@@ -157,3 +158,14 @@ def is_system_directory(path: Path) -> bool:
 def validate_destination(path: Path) -> None:
     """Legacy validation function - now handled via fallback to native cp."""
     pass
+
+
+def compute_checksum(filepath: str, algorithm: str = "sha256") -> str:
+    """Compute hex digest of a file using the given algorithm.
+    Reads in BUFFER_SIZE chunks to avoid loading entire file into memory.
+    """
+    h = hashlib.new(algorithm)
+    with open(filepath, "rb") as f:
+        while chunk := f.read(BUFFER_SIZE):
+            h.update(chunk)
+    return h.hexdigest()

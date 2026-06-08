@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .ui import ProgressBar, Colors, getch
 from .utils import (
     format_size, estimate_operation_time, is_system_directory,
-    BUFFER_SIZE, BLOCK_SIZE, PARALLEL_THRESHOLD
+    compute_checksum, BUFFER_SIZE, BLOCK_SIZE, PARALLEL_THRESHOLD
 )
 
 
@@ -57,7 +57,24 @@ def get_all_files(paths: List[str], recursive: bool) -> List[Tuple[str, int]]:
     return files
 
 
-def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_size: int = BUFFER_SIZE):
+def verify_copy(src: str, dst: str) -> bool:
+    """Verify that dst is a byte-identical copy of src using SHA256 checksums.
+    Returns True if checksums match, False otherwise.
+    Prints a failure message to stderr on mismatch.
+    """
+    src_hash = compute_checksum(src)
+    dst_hash = compute_checksum(dst)
+    if src_hash != dst_hash:
+        print(
+            f"{Colors.RED}Verification FAILED: '{src}' → '{dst}' "
+            f"(src={src_hash[:8]}… dst={dst_hash[:8]}…){Colors.RESET}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_size: int = BUFFER_SIZE, verify: bool = False, preserve_symlinks: bool = False):
     """Copy a single file with progress updates. Default buffer: 16MB for optimal performance."""
     src_path = Path(src)
     dst_path = Path(dst)
@@ -65,6 +82,18 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
     # Handle destination being a directory
     if dst_path.is_dir():
         dst_path = dst_path / src_path.name
+
+    # Preserve symlinks as symlinks instead of dereferencing
+    if src_path.is_symlink() and preserve_symlinks:
+        link_target = os.readlink(src)
+        if dst_path.exists() or dst_path.is_symlink():
+            if not progress.ask_overwrite(str(dst_path)):
+                return False
+            dst_path.unlink()
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(link_target, dst_path)
+        progress.update(src_path.name, 0)
+        return True
 
     # Check if destination file already exists
     if dst_path.exists():
@@ -96,6 +125,10 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
 
     # Preserve metadata
     shutil.copystat(src, dst_path)
+
+    if verify and not verify_copy(src, str(dst_path)):
+        return False
+
     return True
 
 
@@ -115,7 +148,7 @@ def copy_block(src: str, dst: str, offset: int, size: int, block_num: int, progr
     return block_num
 
 
-def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: int = 4, block_size: int = BLOCK_SIZE):
+def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: int = 4, block_size: int = BLOCK_SIZE, verify: bool = False):
     """Copy a large file using parallel block copying.
 
     Args:
@@ -124,6 +157,7 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
         progress: ProgressBar instance for tracking
         num_workers: Number of parallel workers (default: 4)
         block_size: Size of each block in bytes (default: 32MB)
+        verify: Verify copy with SHA256 checksum after transfer
     """
     src_path = Path(src)
     dst_path = Path(dst)
@@ -150,7 +184,7 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
 
     # For small files, use regular copy
     if file_size < block_size * 2:
-        return copy_file_with_progress(src, str(dst_path), progress)
+        return copy_file_with_progress(src, str(dst_path), progress, verify=verify)
 
     # Create destination file with correct size
     with open(dst_path, 'wb') as fdst:
@@ -194,6 +228,10 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
 
     # Preserve metadata
     shutil.copystat(src, dst_path)
+
+    if verify and not verify_copy(src, str(dst_path)):
+        return False
+
     return True
 
 
@@ -229,7 +267,7 @@ def copy_directory_with_progress(src: str, dst: str, progress: ProgressBar):
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
 
 
-def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool = False, parallel: int = 0):
+def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool = False, parallel: int = 0, verify: bool = False, preserve_symlinks: bool = False):
     """Execute copy operation with progress bar.
 
     Args:
@@ -238,6 +276,8 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
         recursive: Whether to copy directories recursively
         dry_run: Preview mode without copying
         parallel: Number of parallel workers for large files (0 = disabled)
+        verify: Verify each file with SHA256 checksum after copying
+        preserve_symlinks: Preserve symlinks as symlinks instead of copying target contents
     """
     # Validate inputs
     if not sources:
@@ -275,20 +315,33 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
             print(f"{Colors.RED}Error: '{src}' does not exist{Colors.RESET}", file=sys.stderr)
             continue
 
-        if src_path.is_file():
+        if src_path.is_symlink() and preserve_symlinks:
+            # Treat the symlink itself as an entry (size 0 — we copy the link, not the content)
+            all_files.append((str(src_path), 0))
+        elif src_path.is_file():
             all_files.append((str(src_path), src_path.stat().st_size))
         elif src_path.is_dir():
             if recursive:
                 # Walk directory and collect files in one pass
-                for root, _, files in os.walk(str(src_path)):
+                follow = not preserve_symlinks
+                for root, dirs, files in os.walk(str(src_path), followlinks=follow):
                     for filename in files:
                         filepath = os.path.join(root, filename)
-                        try:
-                            all_files.append((filepath, os.path.getsize(filepath)))
-                        except (PermissionError, OSError) as e:
-                            print(f"{Colors.YELLOW}Warning: Cannot access '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
-                            # Still add to list so user knows it was skipped
+                        fp = Path(filepath)
+                        if fp.is_symlink() and preserve_symlinks:
                             all_files.append((filepath, 0))
+                        else:
+                            try:
+                                all_files.append((filepath, os.path.getsize(filepath)))
+                            except (PermissionError, OSError) as e:
+                                print(f"{Colors.YELLOW}Warning: Cannot access '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
+                                all_files.append((filepath, 0))
+                    if preserve_symlinks:
+                        # Symlinked subdirs won't be descended into; add them as entries
+                        for d in dirs:
+                            dir_path_str = os.path.join(root, d)
+                            if Path(dir_path_str).is_symlink():
+                                all_files.append((dir_path_str, 0))
             else:
                 print(f"{Colors.RED}Error: '{src}' is a directory. Use -r to copy recursively{Colors.RESET}", file=sys.stderr)
 
@@ -330,6 +383,8 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
     # BUG FIX #1: Use is_relative_to instead of startswith to avoid false positives
     dir_sources = [Path(src) for src in sources if Path(src).is_dir() and recursive]
 
+    verify_failures = 0
+
     # Copy all files
     for src_file, file_size in all_files:
         src_file_path = Path(src_file)
@@ -367,11 +422,13 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
 
                 # Use parallel mode for large files (> 64MB) if enabled
                 if parallel > 0 and file_size > PARALLEL_THRESHOLD:
-                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel):
-                        progress.complete_item()
+                    ok = copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel, verify=verify)
                 else:
-                    if copy_file_with_progress(src_file, str(dst_file), progress):
-                        progress.complete_item()
+                    ok = copy_file_with_progress(src_file, str(dst_file), progress, verify=verify, preserve_symlinks=preserve_symlinks)
+                if ok:
+                    progress.complete_item()
+                elif verify:
+                    verify_failures += 1
             except (PermissionError, OSError) as e:
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
         else:
@@ -379,13 +436,23 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
             try:
                 # Use parallel mode for large files (> 64MB) if enabled
                 if parallel > 0 and file_size > PARALLEL_THRESHOLD:
-                    if copy_file_parallel(src_file, destination, progress, num_workers=parallel):
-                        progress.complete_item()
+                    ok = copy_file_parallel(src_file, destination, progress, num_workers=parallel, verify=verify)
                 else:
-                    if copy_file_with_progress(src_file, destination, progress):
-                        progress.complete_item()
+                    ok = copy_file_with_progress(src_file, destination, progress, verify=verify, preserve_symlinks=preserve_symlinks)
+                if ok:
+                    progress.complete_item()
+                elif verify:
+                    verify_failures += 1
             except (PermissionError, OSError) as e:
                 print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+
+    if verify:
+        if verify_failures > 0:
+            print(f"{Colors.RED}Verification: {verify_failures} file(s) failed{Colors.RESET}", file=sys.stderr)
+            progress.finish()
+            sys.exit(1)
+        else:
+            print(f"{Colors.GREEN}Verification: all files OK{Colors.RESET}")
 
     progress.finish()
 
