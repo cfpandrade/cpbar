@@ -52,17 +52,33 @@ class TestRemoveOperations:
         """Test that removing a directory without -r flag should fail."""
         import sys
         from io import StringIO
-        
+
         test_dir = self.work_dir / "emptydir"
         test_dir.mkdir()
-        
+
         old_stderr = sys.stderr
         sys.stderr = StringIO()
-        
+
         files = get_all_files([str(test_dir)], recursive=False)
-        
+
         error_output = sys.stderr.getvalue()
         sys.stderr = old_stderr
-        
+
         assert len(files) == 0
         assert "is a directory" in error_output
+
+    def test_remove_symlink_removes_link_not_target(self):
+        """Test that os.remove on a symlink removes the link, not the target file."""
+        target = self.work_dir / "target.txt"
+        target.write_text("target content")
+        link = self.work_dir / "link.txt"
+        link.symlink_to(target)
+
+        assert link.is_symlink()
+
+        # os.remove should remove the link, leaving target intact
+        os.remove(str(link))
+
+        assert not link.exists()
+        assert target.exists()
+        assert target.read_text() == "target content"

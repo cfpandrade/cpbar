@@ -82,6 +82,10 @@ Author:
     optimal = get_optimal_workers()
     cp_parser.add_argument('-P', '--parallel', type=int, nargs='?', const=optimal, default=0, metavar='WORKERS',
                           help=f'use parallel mode for large files (default: {optimal} workers from benchmark). Optimal: 4-8 for SSDs. Activates automatically for files > 64MB. Run "cpbar benchmark" to detect optimal value.')
+    cp_parser.add_argument('--verify', action='store_true',
+                          help='verify each file after copying using SHA256 checksum (reads each file twice, ~50%% slower)')
+    cp_parser.add_argument('--preserve-symlinks', action='store_true', default=False,
+                          help='preserve symlinks as symlinks instead of copying target contents')
     cp_parser.add_argument('sources', nargs='+', help='source files or directories to copy')
     cp_parser.add_argument('destination', help='destination path')
 
@@ -180,7 +184,7 @@ Author:
         if len(args.sources) < 1:
             print(f"{Colors.RED}Error: At least one source file and a destination required{Colors.RESET}", file=sys.stderr)
             sys.exit(1)
-        do_copy(args.sources, args.destination, args.recursive, args.dry_run, args.parallel)
+        do_copy(args.sources, args.destination, args.recursive, args.dry_run, args.parallel, args.verify, args.preserve_symlinks)
 
     elif args.command == 'mv':
         if len(args.sources) < 1:
