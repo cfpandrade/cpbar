@@ -140,7 +140,7 @@ class TestVerifyCopy:
         src.write_bytes(b"source content")
 
         # Monkeypatch verify_copy to always fail
-        monkeypatch.setattr("cpbar.operations.verify_copy", lambda s, d: False)
+        monkeypatch.setattr("cpbar.operations.verify_copy", lambda s, d, progress=None: False)
 
         old_stdout = sys.stdout
         old_stderr = sys.stderr
@@ -169,3 +169,20 @@ class TestVerifyCopy:
             sys.stdout = old_stdout
 
         assert "all files OK" in output
+
+    def test_do_copy_verify_skipped_file_is_not_a_failure(self, monkeypatch):
+        """Test that declining an overwrite with --verify does not count as a verification failure."""
+        src = self.src_dir / "file.txt"
+        src.write_bytes(b"new content")
+        (self.dst_dir / "file.txt").write_bytes(b"old content")
+
+        monkeypatch.setattr("cpbar.ui.getch", lambda valid_keys: "n")
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            do_copy([str(src)], str(self.dst_dir), recursive=False, verify=True)
+        finally:
+            sys.stdout = old_stdout
+
+        assert (self.dst_dir / "file.txt").read_bytes() == b"old content"

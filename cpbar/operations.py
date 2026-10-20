@@ -24,17 +24,23 @@ from .utils import (
 )
 
 
-def get_all_files(paths: List[str], recursive: bool) -> List[Tuple[str, int]]:
+def get_all_files(paths: List[str], recursive: bool, force: bool = False) -> List[Tuple[str, int]]:
     """
     Get all files from given paths with their sizes.
     Returns list of tuples (filepath, size).
+    Symlinks are returned as entries themselves (never followed), like rm does.
+    With force, missing paths are ignored silently, like rm -f.
     """
     files = []
 
     for path in paths:
         p = Path(path)
+        if p.is_symlink():
+            files.append((str(p), 0))
+            continue
         if not p.exists():
-            print(f"{Colors.RED}Error: '{path}' does not exist{Colors.RESET}", file=sys.stderr)
+            if not force:
+                print(f"{Colors.RED}Error: '{path}' does not exist{Colors.RESET}", file=sys.stderr)
             continue
 
         if p.is_file():
@@ -57,7 +63,7 @@ def get_all_files(paths: List[str], recursive: bool) -> List[Tuple[str, int]]:
     return files
 
 
-def verify_copy(src: str, dst: str) -> bool:
+def verify_copy(src: str, dst: str, progress: ProgressBar = None) -> bool:
     """Verify that dst is a byte-identical copy of src using SHA256 checksums.
     Returns True if checksums match, False otherwise.
     Prints a failure message to stderr on mismatch.
@@ -65,17 +71,22 @@ def verify_copy(src: str, dst: str) -> bool:
     src_hash = compute_checksum(src)
     dst_hash = compute_checksum(dst)
     if src_hash != dst_hash:
-        print(
+        message = (
             f"{Colors.RED}Verification FAILED: '{src}' → '{dst}' "
-            f"(src={src_hash[:8]}… dst={dst_hash[:8]}…){Colors.RESET}",
-            file=sys.stderr,
+            f"(src={src_hash[:8]}… dst={dst_hash[:8]}…){Colors.RESET}"
         )
+        if progress is not None:
+            progress.log(message, file=sys.stderr)
+        else:
+            print(message, file=sys.stderr)
         return False
     return True
 
 
-def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_size: int = BUFFER_SIZE, verify: bool = False, preserve_symlinks: bool = False):
-    """Copy a single file with progress updates. Default buffer: 16MB for optimal performance."""
+def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_size: int = BUFFER_SIZE, verify: bool = False, preserve_symlinks: bool = False, confirmed: bool = False):
+    """Copy a single file with progress updates. Default buffer: 16MB for optimal performance.
+    With confirmed, an existing destination is overwritten without asking (the caller already did).
+    """
     src_path = Path(src)
     dst_path = Path(dst)
 
@@ -87,7 +98,7 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
     if src_path.is_symlink() and preserve_symlinks:
         link_target = os.readlink(src)
         if dst_path.exists() or dst_path.is_symlink():
-            if not progress.ask_overwrite(str(dst_path)):
+            if not confirmed and not progress.ask_overwrite(str(dst_path)):
                 return False
             dst_path.unlink()
         dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +107,7 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
         return True
 
     # Check if destination file already exists
-    if dst_path.exists():
+    if dst_path.exists() and not confirmed:
         if not progress.ask_overwrite(str(dst_path)):
             # User chose not to overwrite, skip this file
             return False
@@ -126,7 +137,7 @@ def copy_file_with_progress(src: str, dst: str, progress: ProgressBar, buffer_si
     # Preserve metadata
     shutil.copystat(src, dst_path)
 
-    if verify and not verify_copy(src, str(dst_path)):
+    if verify and not verify_copy(src, str(dst_path), progress):
         return False
 
     return True
@@ -148,7 +159,7 @@ def copy_block(src: str, dst: str, offset: int, size: int, block_num: int, progr
     return block_num
 
 
-def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: int = 4, block_size: int = BLOCK_SIZE, verify: bool = False):
+def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: int = 4, block_size: int = BLOCK_SIZE, verify: bool = False, confirmed: bool = False):
     """Copy a large file using parallel block copying.
 
     Args:
@@ -158,6 +169,7 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
         num_workers: Number of parallel workers (default: 4)
         block_size: Size of each block in bytes (default: 32MB)
         verify: Verify copy with SHA256 checksum after transfer
+        confirmed: Overwrite an existing destination without asking
     """
     src_path = Path(src)
     dst_path = Path(dst)
@@ -167,9 +179,10 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
         dst_path = dst_path / src_path.name
 
     # Check if destination file already exists
-    if dst_path.exists():
+    if dst_path.exists() and not confirmed:
         if not progress.ask_overwrite(str(dst_path)):
             return False
+    confirmed = True
 
     # Create parent directories if needed
     dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +197,7 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
 
     # For small files, use regular copy
     if file_size < block_size * 2:
-        return copy_file_with_progress(src, str(dst_path), progress, verify=verify)
+        return copy_file_with_progress(src, str(dst_path), progress, verify=verify, confirmed=confirmed)
 
     # Create destination file with correct size
     with open(dst_path, 'wb') as fdst:
@@ -203,7 +216,7 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
 
     # Show parallel mode info
     block_size_str = format_size(block_size)
-    print(f"{Colors.CYAN}⚡ Parallel mode: {num_workers} workers, {len(blocks)} blocks of {block_size_str}{Colors.RESET}")
+    progress.log(f"{Colors.CYAN}⚡ Parallel mode: {num_workers} workers, {len(blocks)} blocks of {block_size_str}{Colors.RESET}")
 
     # Copy blocks in parallel
     write_lock = threading.Lock()
@@ -229,7 +242,7 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
     # Preserve metadata
     shutil.copystat(src, dst_path)
 
-    if verify and not verify_copy(src, str(dst_path)):
+    if verify and not verify_copy(src, str(dst_path), progress):
         return False
 
     return True
@@ -264,7 +277,27 @@ def copy_directory_with_progress(src: str, dst: str, progress: ProgressBar):
                 if copy_file_with_progress(src_file, str(dst_file), progress):
                     progress.complete_item()
             except (PermissionError, OSError) as e:
-                print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+                progress.log(f"{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+
+
+def make_directory_tree(src_dir: Path, dst_dir: Path, follow_symlinks: bool = True):
+    """Recreate the directory structure of src_dir under dst_dir, including empty directories.
+    Without follow_symlinks, symlinked subdirectories are left for the caller to copy as links.
+    """
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for root, dirs, _ in os.walk(str(src_dir), followlinks=follow_symlinks):
+        rel_root = os.path.relpath(root, src_dir)
+        for d in dirs:
+            if not follow_symlinks and os.path.islink(os.path.join(root, d)):
+                continue
+            (dst_dir / rel_root / d).mkdir(parents=True, exist_ok=True)
+
+
+def directory_destination(src_dir: Path, dst_path: Path, copy_into: bool) -> Path:
+    """Where a source directory lands: inside dst_path if it was an existing directory
+    (or there are several sources), otherwise dst_path becomes the copy, like cp -r and mv.
+    """
+    return dst_path / src_dir.name if copy_into else dst_path
 
 
 def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool = False, parallel: int = 0, verify: bool = False, preserve_symlinks: bool = False):
@@ -296,6 +329,9 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
         cmd.append(destination)
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
+
+    # Source directories go inside the destination only if it already is a directory
+    copy_into = dst_path.is_dir() or len(sources) > 1
 
     # If multiple sources, destination must be a directory
     if len(sources) > 1 and not dst_path.is_dir():
@@ -345,7 +381,8 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
             else:
                 print(f"{Colors.RED}Error: '{src}' is a directory. Use -r to copy recursively{Colors.RESET}", file=sys.stderr)
 
-    if not all_files:
+    # An empty source directory is still something to copy
+    if not all_files and not any(recursive and Path(src).is_dir() for src in sources):
         print(f"{Colors.RED}Error: No files to copy{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
 
@@ -383,6 +420,14 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
     # BUG FIX #1: Use is_relative_to instead of startswith to avoid false positives
     dir_sources = [Path(src) for src in sources if Path(src).is_dir() and recursive]
 
+    for dir_path in dir_sources:
+        try:
+            make_directory_tree(dir_path, directory_destination(dir_path, dst_path, copy_into),
+                                follow_symlinks=not preserve_symlinks)
+        except (PermissionError, OSError) as e:
+            progress.log(f"{Colors.RED}Error: Cannot create '{destination}': {e}{Colors.RESET}", file=sys.stderr)
+            sys.exit(1)
+
     verify_failures = 0
 
     # Copy all files
@@ -417,42 +462,46 @@ def do_copy(sources: List[str], destination: str, recursive: bool, dry_run: bool
             # File is part of a directory - copy with directory structure
             try:
                 rel_path = src_file_path.relative_to(parent_dir)
-                dst_file = dst_path / parent_dir.name / rel_path
+                dst_file = directory_destination(parent_dir, dst_path, copy_into) / rel_path
                 dst_file.parent.mkdir(parents=True, exist_ok=True)
 
                 # Use parallel mode for large files (> 64MB) if enabled
+                # (a file skipped at the overwrite prompt is not a verification failure)
+                skipped_before = progress.skipped_items
                 if parallel > 0 and file_size > PARALLEL_THRESHOLD:
                     ok = copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel, verify=verify)
                 else:
                     ok = copy_file_with_progress(src_file, str(dst_file), progress, verify=verify, preserve_symlinks=preserve_symlinks)
                 if ok:
                     progress.complete_item()
-                elif verify:
+                elif verify and progress.skipped_items == skipped_before:
                     verify_failures += 1
             except (PermissionError, OSError) as e:
-                print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+                progress.log(f"{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
         else:
             # Individual file - copy directly
             try:
                 # Use parallel mode for large files (> 64MB) if enabled
+                # (a file skipped at the overwrite prompt is not a verification failure)
+                skipped_before = progress.skipped_items
                 if parallel > 0 and file_size > PARALLEL_THRESHOLD:
                     ok = copy_file_parallel(src_file, destination, progress, num_workers=parallel, verify=verify)
                 else:
                     ok = copy_file_with_progress(src_file, destination, progress, verify=verify, preserve_symlinks=preserve_symlinks)
                 if ok:
                     progress.complete_item()
-                elif verify:
+                elif verify and progress.skipped_items == skipped_before:
                     verify_failures += 1
             except (PermissionError, OSError) as e:
-                print(f"\n{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+                progress.log(f"{Colors.YELLOW}Warning: Could not copy '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
 
     if verify:
         if verify_failures > 0:
-            print(f"{Colors.RED}Verification: {verify_failures} file(s) failed{Colors.RESET}", file=sys.stderr)
+            progress.log(f"{Colors.RED}Verification: {verify_failures} file(s) failed{Colors.RESET}", file=sys.stderr)
             progress.finish()
             sys.exit(1)
         else:
-            print(f"{Colors.GREEN}Verification: all files OK{Colors.RESET}")
+            progress.log(f"{Colors.GREEN}Verification: all files OK{Colors.RESET}")
 
     progress.finish()
 
@@ -482,6 +531,9 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
         cmd.append(destination)
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
+
+    # Source directories go inside the destination only if it already is a directory
+    copy_into = dst_path.is_dir() or len(sources) > 1
 
     # If multiple sources, destination must be a directory
     if len(sources) > 1 and not dst_path.is_dir():
@@ -516,7 +568,8 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
                         print(f"{Colors.YELLOW}Warning: Cannot access '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
                         all_files.append((filepath, 0))
 
-    if not all_files:
+    # An empty source directory is still something to move
+    if not all_files and not dirs_to_process:
         print(f"{Colors.RED}Error: No files to move{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
 
@@ -549,6 +602,15 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
     print(f"{Colors.BLUE}Moving {total_items} files ({format_size(total_bytes)})...{Colors.RESET}")
 
     progress = ProgressBar(total_items, total_bytes, "mv")
+
+    # Recreate the directory structure first so empty directories are moved too
+    for dir_path in dirs_to_process:
+        try:
+            make_directory_tree(dir_path, directory_destination(dir_path, dst_path, copy_into),
+                                follow_symlinks=False)
+        except (PermissionError, OSError) as e:
+            progress.log(f"{Colors.RED}Error: Cannot create '{destination}': {e}{Colors.RESET}", file=sys.stderr)
+            sys.exit(1)
 
     # Check if source and destination are on the same filesystem
     # If so, we can use rename for instant moves
@@ -592,13 +654,12 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
             # File is part of a directory - move with directory structure
             try:
                 rel_path = src_file_path.relative_to(parent_dir)
-                dst_file = dst_path / parent_dir.name / rel_path
+                dst_file = directory_destination(parent_dir, dst_path, copy_into) / rel_path
                 dst_file.parent.mkdir(parents=True, exist_ok=True)
 
                 # Check if destination file already exists
                 if dst_file.exists():
                     if not progress.ask_overwrite(str(dst_file)):
-                        progress.complete_item()
                         continue
 
                 # Try rename first (instant if same filesystem)
@@ -615,15 +676,15 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
 
                 # Fall back to copy + delete
                 if parallel > 0 and file_size > PARALLEL_THRESHOLD:
-                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel):
+                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel, confirmed=True):
                         os.remove(src_file)
                         progress.complete_item()
                 else:
-                    if copy_file_with_progress(src_file, str(dst_file), progress):
+                    if copy_file_with_progress(src_file, str(dst_file), progress, confirmed=True):
                         os.remove(src_file)
                         progress.complete_item()
             except (PermissionError, OSError) as e:
-                print(f"\n{Colors.YELLOW}Warning: Could not move '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+                progress.log(f"{Colors.YELLOW}Warning: Could not move '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
         else:
             # Individual file - move directly
             try:
@@ -636,7 +697,6 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
                 # Check if destination file already exists
                 if dst_file.exists():
                     if not progress.ask_overwrite(str(dst_file)):
-                        progress.complete_item()
                         continue
 
                 # Try rename first (instant if same filesystem)
@@ -653,24 +713,25 @@ def do_move(sources: List[str], destination: str, recursive: bool, dry_run: bool
 
                 # Fall back to copy + delete
                 if parallel > 0 and file_size > PARALLEL_THRESHOLD:
-                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel):
+                    if copy_file_parallel(src_file, str(dst_file), progress, num_workers=parallel, confirmed=True):
                         os.remove(src_file)
                         progress.complete_item()
                 else:
-                    if copy_file_with_progress(src_file, str(dst_file), progress):
+                    if copy_file_with_progress(src_file, str(dst_file), progress, confirmed=True):
                         os.remove(src_file)
                         progress.complete_item()
             except (PermissionError, OSError) as e:
-                print(f"\n{Colors.YELLOW}Warning: Could not move '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
+                progress.log(f"{Colors.YELLOW}Warning: Could not move '{src_file}': {e}{Colors.RESET}", file=sys.stderr)
 
-    # Remove empty source directories
+    # Remove the now empty source directories, deepest first
     for dir_path in reversed(dirs_to_process):
-        try:
-            # Only remove if empty
-            if dir_path.exists() and not any(dir_path.iterdir()):
-                dir_path.rmdir()
-        except (PermissionError, OSError):
-            pass  # Directory not empty or can't remove, that's OK
+        for root, _, _ in os.walk(str(dir_path), topdown=False):
+            try:
+                # Only remove if empty
+                if not any(os.scandir(root)):
+                    os.rmdir(root)
+            except (PermissionError, OSError):
+                pass  # Directory not empty or can't remove, that's OK
 
     progress.finish()
 
@@ -682,17 +743,20 @@ def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = 
         sys.exit(1)
 
     # Collect all files to remove
-    all_files = get_all_files(targets, recursive)
+    all_files = get_all_files(targets, recursive, force)
     dirs_to_remove = []
 
-    # Also collect directories if recursive
+    # Also collect directories if recursive (a symlink to a directory is just a file here)
     if recursive:
         for target in targets:
             p = Path(target)
-            if p.is_dir():
+            if p.is_dir() and not p.is_symlink():
                 dirs_to_remove.append(str(p))
 
     if not all_files and not dirs_to_remove:
+        if force:
+            # rm -f exits successfully when there is nothing to delete
+            return
         print(f"{Colors.RED}Error: No files to delete{Colors.RESET}", file=sys.stderr)
         sys.exit(1)
 
@@ -733,9 +797,10 @@ def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = 
 
         # 3-second countdown before allowing confirmation
         # Disable terminal echo during countdown to suppress visual noise
-        fd = sys.stdin.fileno()
+        fd = None
         old_settings = None
         try:
+            fd = sys.stdin.fileno()
             # Save current terminal settings
             old_settings = termios.tcgetattr(fd)
             # Disable echo
@@ -786,16 +851,16 @@ def do_remove(targets: List[str], recursive: bool, force: bool, dry_run: bool = 
             os.remove(filepath)
             progress.complete_item()
         except (PermissionError, OSError) as e:
-            print(f"\n{Colors.YELLOW}Warning: Could not delete '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
+            progress.log(f"{Colors.YELLOW}Warning: Could not delete '{filepath}': {e}{Colors.RESET}", file=sys.stderr)
 
     # Remove directories (in reverse order to handle nested dirs)
     if recursive:
-        for target in targets:
+        for target in dirs_to_remove:
             p = Path(target)
             if p.is_dir():
                 try:
                     shutil.rmtree(target)
                 except (PermissionError, OSError) as e:
-                    print(f"\n{Colors.YELLOW}Warning: Could not delete directory '{target}': {e}{Colors.RESET}", file=sys.stderr)
+                    progress.log(f"{Colors.YELLOW}Warning: Could not delete directory '{target}': {e}{Colors.RESET}", file=sys.stderr)
 
     progress.finish()

@@ -181,3 +181,74 @@ class TestMoveOperations:
         assert dst_link.is_symlink(), "Moved entry should be a symlink (rename preserves it)"
         assert target.exists(), "Original target should be untouched"
         assert not link.exists(), "Original link should be gone"
+
+    # --- mv destination semantics and cleanup ---
+
+    def test_move_dir_to_new_path_renames_it(self):
+        """Test that mv src new turns src into 'new', like mv does."""
+        (self.src_dir / "file.txt").write_text("content")
+        new = Path(self.test_dir) / "new"
+
+        self._suppress_output(do_move, [str(self.src_dir)], str(new), recursive=False)
+
+        assert (new / "file.txt").read_text() == "content"
+        assert not self.src_dir.exists()
+
+    def test_move_nested_dir_leaves_no_empty_source_dirs(self):
+        """Test that moving a tree removes the whole source, including empty subdirectories."""
+        (self.src_dir / "a" / "b").mkdir(parents=True)
+        (self.src_dir / "a" / "b" / "file.txt").write_text("content")
+        (self.src_dir / "empty").mkdir()
+
+        self._suppress_output(do_move, [str(self.src_dir)], str(self.dst_dir), recursive=False)
+
+        assert not self.src_dir.exists()
+        assert (self.dst_dir / "src" / "a" / "b" / "file.txt").read_text() == "content"
+        assert (self.dst_dir / "src" / "empty").is_dir()
+
+    def test_move_skipped_file_is_not_counted_as_moved(self, monkeypatch):
+        """Test that declining an overwrite keeps both files and is reported as skipped."""
+        src_file = self.src_dir / "file.txt"
+        src_file.write_text("new")
+        (self.dst_dir / "file.txt").write_text("old")
+
+        monkeypatch.setattr("cpbar.ui.getch", lambda valid_keys: "n")
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            do_move([str(src_file)], str(self.dst_dir), recursive=False)
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        assert src_file.read_text() == "new"
+        assert (self.dst_dir / "file.txt").read_text() == "old"
+        assert "Moved: 0 files" in output
+        assert "Skipped: 1" in output
+
+    def test_move_across_filesystems_asks_overwrite_once(self, monkeypatch):
+        """Test that the copy+delete fallback doesn't ask a second time to overwrite."""
+        src_file = self.src_dir / "file.txt"
+        src_file.write_text("new")
+        (self.dst_dir / "file.txt").write_text("old")
+
+        calls = []
+
+        def counting_getch(valid_keys):
+            calls.append(valid_keys)
+            return "y"
+
+        monkeypatch.setattr("cpbar.ui.getch", counting_getch)
+
+        # Force the copy+delete path as if src and dst were on different filesystems
+        def failing_rename(self_path, target):
+            raise OSError("cross-device link")
+
+        monkeypatch.setattr(Path, 'rename', failing_rename)
+
+        self._suppress_output(do_move, [str(src_file)], str(self.dst_dir), recursive=False)
+
+        assert len(calls) == 1
+        assert (self.dst_dir / "file.txt").read_text() == "new"
+        assert not src_file.exists()

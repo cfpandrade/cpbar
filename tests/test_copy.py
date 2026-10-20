@@ -392,3 +392,41 @@ class TestCopyOperations:
 
         dst_link = self.dst_dir / "link.txt"
         assert dst_link.is_symlink()
+
+    # --- cp -r destination semantics ---
+
+    def test_copy_dir_to_new_path_creates_copy(self):
+        """Test that cp -r src new copies the contents into 'new', like cp does."""
+        (self.src_dir / "sub").mkdir()
+        (self.src_dir / "sub" / "file.txt").write_text("content")
+        new = Path(self.test_dir) / "new"
+
+        self._run_quiet(do_copy, [str(self.src_dir)], str(new), recursive=True)
+
+        assert (new / "sub" / "file.txt").read_text() == "content"
+        assert not (new / "src").exists()
+
+    def test_copy_dir_into_existing_dir(self):
+        """Test that cp -r src existing/ copies into existing/src."""
+        (self.src_dir / "file.txt").write_text("content")
+
+        self._run_quiet(do_copy, [str(self.src_dir)], str(self.dst_dir), recursive=True)
+
+        assert (self.dst_dir / "src" / "file.txt").read_text() == "content"
+
+    def test_copy_dir_keeps_empty_directories(self):
+        """Test that empty subdirectories are copied too."""
+        (self.src_dir / "empty").mkdir()
+
+        self._run_quiet(do_copy, [str(self.src_dir)], str(self.dst_dir), recursive=True)
+
+        assert (self.dst_dir / "src" / "empty").is_dir()
+
+    def _run_quiet(self, func, *args, **kwargs):
+        """Run func suppressing stdout (progress bar output)."""
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            sys.stdout = old_stdout
