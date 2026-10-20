@@ -45,24 +45,10 @@ class Colors:
 
 # ANSI escape codes for cursor/screen control (empty if not TTY)
 class Cursor:
-    SAVE = "\033[s" if IS_TTY else ""
-    RESTORE = "\033[u" if IS_TTY else ""
     HIDE = "\033[?25l" if IS_TTY else ""
     SHOW = "\033[?25h" if IS_TTY else ""
-
-    @staticmethod
-    def move_to(row: int, col: int = 1) -> str:
-        if IS_TTY:
-            return f"\033[{row};{col}H"
-        return ""
-
-    @staticmethod
-    def move_to_bottom() -> str:
-        """Move cursor to last line of terminal."""
-        if IS_TTY:
-            rows = shutil.get_terminal_size().lines
-            return f"\033[{rows};1H"
-        return ""
+    # Return to column 1 and erase the current line
+    CLEAR_LINE = "\r\033[2K" if IS_TTY else ""
 
 
 def getch(valid_keys: str) -> str:
@@ -74,15 +60,21 @@ def getch(valid_keys: str) -> str:
         valid_keys: String of valid characters (e.g., "ynaq")
     
     Returns:
-        Single lowercase character from valid_keys
+        Single lowercase character from valid_keys. If stdin runs out
+        (e.g. </dev/null or a script) the safe answer 'n' is returned.
     """
-    if not IS_TTY:
-        # Fallback to regular input in non-TTY mode
+    if not sys.stdin.isatty():
+        # Fallback to line-based input when stdin is not a terminal
         while True:
-            response = input().strip().lower()
+            try:
+                response = input().strip().lower()
+            except EOFError:
+                if 'n' in valid_keys.lower():
+                    return 'n'
+                raise KeyboardInterrupt
             if response and response[0] in valid_keys.lower():
                 return response[0]
-    
+
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
@@ -105,9 +97,13 @@ def getch(valid_keys: str) -> str:
 
 class ProgressBar:
     """A single progress bar that tracks total progress across all files.
-    Always displays at the bottom of the terminal and adapts to terminal width.
+    Drawn inline on the line where the operation started (the terminal is never
+    scrolled to the bottom) and adapts to terminal width.
     In non-TTY mode, falls back to simple line-based progress updates.
     """
+
+    # Minimum seconds between redraws, so thousands of tiny files don't flood the terminal
+    RENDER_INTERVAL = 0.05
 
     def __init__(self, total_items: int, total_bytes: int, operation: str):
         self.total_items = total_items
@@ -125,13 +121,15 @@ class ProgressBar:
         # Time estimation
         self.start_time = time.time()
         self.last_update_time = self.start_time
+        self.last_render_time = 0.0
 
         # Speed tracking
         self.last_bytes = 0
         self.current_speed = 0.0  # bytes per second
 
-        # Thread safety lock for concurrent updates
-        self._lock = threading.Lock()
+        # Thread safety lock for concurrent updates. Reentrant so the SIGWINCH
+        # handler can redraw even if it interrupts the main thread mid-render.
+        self._lock = threading.RLock()
 
         # Handle Ctrl+C gracefully
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -141,12 +139,13 @@ class ProgressBar:
     def _signal_handler(self, signum, frame):
         self.interrupted = True
         self._cleanup()
-        print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
+        print(f"{Cursor.CLEAR_LINE}{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
         sys.exit(130)
 
     def _resize_handler(self, signum, frame):
         """Handle terminal resize."""
-        self.update(self.current_file, 0)
+        if self.started:
+            self._update_tty_display(force=True)
 
     def _get_terminal_size(self) -> Tuple[int, int]:
         """Get terminal dimensions (columns, lines)."""
@@ -158,10 +157,7 @@ class ProgressBar:
         if self.started:
             return
         self.started = True
-        # Hide cursor and save position
         sys.stdout.write(Cursor.HIDE)
-        # Add a blank line at the bottom for the progress bar
-        sys.stdout.write("\n")
         sys.stdout.flush()
 
     def _cleanup(self):
@@ -169,6 +165,25 @@ class ProgressBar:
         # Show cursor
         sys.stdout.write(Cursor.SHOW)
         sys.stdout.flush()
+
+    def log(self, message: str, file=None):
+        """Print a message above the progress bar without corrupting it."""
+        file = file or sys.stdout
+        with self._lock:
+            if self.is_tty and self.started:
+                sys.stdout.write(Cursor.CLEAR_LINE)
+                sys.stdout.flush()
+            print(message, file=file)
+            file.flush()
+            if self.is_tty and self.started:
+                self._update_tty_display(force=True)
+
+    def _reset_speed_baseline(self):
+        """Restart speed measurement, e.g. after waiting for user input."""
+        with self._lock:
+            self.current_speed = 0.0
+            self.last_bytes = self.completed_bytes
+            self.last_update_time = time.time()
 
     def ask_overwrite(self, filepath: str) -> bool:
         """Ask user if they want to overwrite a file.
@@ -178,64 +193,34 @@ class ProgressBar:
         if self.overwrite_all:
             return True
 
-        _, rows = self._get_terminal_size()
-
-        # Move to the line just above the progress bar and clear it
-        sys.stdout.write(Cursor.move_to(rows - 1, 1))
-        sys.stdout.write("\033[2K")  # Clear entire line
-        sys.stdout.flush()
-
-        # Show cursor for input
+        # Replace the progress bar line with the prompt
+        sys.stdout.write(Cursor.CLEAR_LINE)
         sys.stdout.write(Cursor.SHOW)
-
-        # Move to the same line
-        sys.stdout.write(Cursor.move_to(rows - 1, 1))
-        sys.stdout.write("\033[2K")  # Clear line
-        sys.stdout.flush()
-
-        # Use sys.stdout.write + getch to control positioning
         sys.stdout.write(f"{Colors.YELLOW}Overwrite '{filepath}'? [y/n/a/q]: {Colors.RESET}")
         sys.stdout.flush()
-        
+
         # Read single character, only accepting valid keys
         response = getch("ynaq")
 
-        if response == 'y':
-            # Clear the prompt line
-            sys.stdout.write(Cursor.move_to(rows - 1, 1))
-            sys.stdout.write("\033[2K")
-            sys.stdout.flush()
-            # Hide cursor again
-            sys.stdout.write(Cursor.HIDE)
-            return True
-        elif response == 'n':
-            self.skipped_items += 1
-            # Clear the prompt line
-            sys.stdout.write(Cursor.move_to(rows - 1, 1))
-            sys.stdout.write("\033[2K")
-            sys.stdout.flush()
-            # Hide cursor again
-            sys.stdout.write(Cursor.HIDE)
-            return False
-        elif response == 'a':
-            self.overwrite_all = True
-            # Clear the prompt line
-            sys.stdout.write(Cursor.move_to(rows - 1, 1))
-            sys.stdout.write("\033[2K")
-            sys.stdout.flush()
-            # Hide cursor again
-            sys.stdout.write(Cursor.HIDE)
-            return True
-        elif response == 'q':
+        if response == 'q':
             self._cleanup()
             print(f"\n{Colors.YELLOW}⚠ Operation cancelled by user{Colors.RESET}")
             sys.exit(0)
 
-    def _clear_line(self):
-        """Clear the current line."""
-        cols, _ = self._get_terminal_size()
-        sys.stdout.write("\r" + " " * cols + "\r")
+        if response == 'n':
+            self.skipped_items += 1
+        elif response == 'a':
+            self.overwrite_all = True
+
+        # Clear the prompt and put the progress bar back in its place
+        # (outside a TTY the prompt can't be erased, so just end its line)
+        sys.stdout.write(Cursor.CLEAR_LINE if self.is_tty else "\n")
+        sys.stdout.write(Cursor.HIDE)
         sys.stdout.flush()
+        self._reset_speed_baseline()
+        if self.started:
+            self._update_tty_display(force=True)
+        return response in ('y', 'a')
 
     def _get_elapsed_time(self) -> str:
         """Get elapsed time since operation started."""
@@ -262,100 +247,97 @@ class ProgressBar:
             self._update_tty_display()
         # Non-TTY mode: updates happen in complete_item()
 
-    def _update_tty_display(self):
+    def _update_tty_display(self, force: bool = False):
         """Update progress bar display in TTY mode (interactive terminal)."""
-        self._setup()
-
         with self._lock:
-            # Calculate speed (with smoothing)
             current_time = time.time()
-            time_delta = current_time - self.last_update_time
+            if not force and current_time - self.last_render_time < self.RENDER_INTERVAL:
+                return
+            self.last_render_time = current_time
 
-            # Reset speed if there was a long pause (e.g., waiting for user input)
-            if time_delta > 2.0:
-                self.current_speed = 0.0
-                self.last_bytes = self.completed_bytes
-                self.last_update_time = current_time
-            elif time_delta > SPEED_UPDATE_INTERVAL:  # Update speed every 100ms
+            self._setup()
+
+            # Calculate speed (with smoothing)
+            time_delta = current_time - self.last_update_time
+            if time_delta > SPEED_UPDATE_INTERVAL:  # Update speed every 100ms
                 bytes_since_last = self.completed_bytes - self.last_bytes
                 instant_speed = bytes_since_last / time_delta
                 # Smooth the speed using exponential moving average
                 self.current_speed = SPEED_SMOOTHING_FACTOR * self.current_speed + (1 - SPEED_SMOOTHING_FACTOR) * instant_speed
                 self.last_bytes = self.completed_bytes
                 self.last_update_time = current_time
+
+            # Capture values for rendering
+            completed_bytes = self.completed_bytes
+            completed_items = self.completed_items
+            total_bytes = self.total_bytes
+            total_items = self.total_items
+            current_speed = self.current_speed
+            display_file = self.current_file
+
+            cols, _ = self._get_terminal_size()
+
+            if total_bytes > 0:
+                progress = min(completed_bytes / total_bytes, 1.0)
             else:
-                self.last_update_time = current_time
+                progress = completed_items / total_items if total_items > 0 else 1.0
 
-            # Capture values for rendering outside lock
-            progress_data = {
-                'completed_bytes': self.completed_bytes,
-                'completed_items': self.completed_items,
-                'total_bytes': self.total_bytes,
-                'total_items': self.total_items,
-                'current_speed': self.current_speed,
-                'current_file': self.current_file,
-            }
+            # Build components
+            if self.operation == "cp":
+                op_icon = "📋"
+            elif self.operation == "mv":
+                op_icon = "🚚"
+            else:
+                op_icon = "🗑️ "
+            pct = f"{progress * 100:5.1f}%"
+            items_str = f"{completed_items}/{total_items}"
+            size_str = f"{format_size(completed_bytes)}/{format_size(total_bytes)}"
 
-        cols, rows = self._get_terminal_size()
+            # Show elapsed time and speed
+            elapsed_str = self._get_elapsed_time()
+            speed_str = format_speed(current_speed) if current_speed > 0 else "---"
+            time_display = f"{elapsed_str} @ {speed_str}"
 
-        # Calculate progress using captured data
-        completed_bytes = progress_data['completed_bytes']
-        completed_items = progress_data['completed_items']
-        total_bytes = progress_data['total_bytes']
-        total_items = progress_data['total_items']
-        current_speed = progress_data['current_speed']
-        display_file = progress_data['current_file']
+            # Truncate filename to reasonable length and pad to fixed width
+            max_filename_len = 20  # Reduced to make room for time and speed
+            display_name = display_file
+            if len(display_name) > max_filename_len:
+                display_name = "..." + display_name[-(max_filename_len-3):]
+            else:
+                # Pad with spaces to maintain constant width
+                display_name = display_name.ljust(max_filename_len)
 
-        if total_bytes > 0:
-            progress = min(completed_bytes / total_bytes, 1.0)
-        else:
-            progress = completed_items / total_items if total_items > 0 else 1.0
+            # Calculate fixed content length (icon + pct + items + size + filename + time + speed + separators)
+            # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | 5m 23s @ 999.9MB/s | filename"
+            fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + len(time_display) + 3 + max_filename_len
 
-        # Build components
-        if self.operation == "cp":
-            op_icon = "📋"
-        elif self.operation == "mv":
-            op_icon = "🚚"
-        else:
-            op_icon = "🗑️ "
-        pct = f"{progress * 100:5.1f}%"
-        items_str = f"{completed_items}/{total_items}"
-        size_str = f"{format_size(completed_bytes)}/{format_size(total_bytes)}"
+            # The line must never wrap, or the carriage return would only redraw its
+            # last row. On narrow terminals drop the filename, then the time.
+            if fixed_len + 15 > cols:
+                fixed_len -= 3 + max_filename_len
+                display_name = None
+            if fixed_len + 15 > cols:
+                fixed_len -= 3 + len(time_display)
+                time_display = None
 
-        # Show elapsed time and speed
-        elapsed_str = self._get_elapsed_time()
-        speed_str = format_speed(current_speed) if current_speed > 0 else "---"
-        time_display = f"{elapsed_str} @ {speed_str}"
+            # Calculate bar width to fill remaining space
+            bar_width = self._calculate_bar_width(fixed_len)
 
-        # Truncate filename to reasonable length and pad to fixed width
-        max_filename_len = 20  # Reduced to make room for time and speed
-        display_name = display_file
-        if len(display_name) > max_filename_len:
-            display_name = "..." + display_name[-(max_filename_len-3):]
-        else:
-            # Pad with spaces to maintain constant width
-            display_name = display_name.ljust(max_filename_len)
+            filled = int(bar_width * progress)
+            empty = bar_width - filled
+            bar = f"{Colors.GREEN}{'█' * filled}{Colors.DIM}{'░' * empty}{Colors.RESET}"
 
-        # Calculate fixed content length (icon + pct + items + size + filename + time + speed + separators)
-        # Format: "📋 100.0% [BAR] 999/999 | 999.9GB/999.9GB | 5m 23s @ 999.9MB/s | filename"
-        fixed_len = 2 + 1 + 6 + 1 + 2 + 1 + len(items_str) + 3 + len(size_str) + 3 + len(time_display) + 3 + max_filename_len
+            # Build the line
+            line = f"{op_icon} {Colors.BOLD}{pct}{Colors.RESET} [{bar}] {items_str} | {size_str}"
+            if time_display is not None:
+                line += f" | {Colors.DIM}{time_display}{Colors.RESET}"
+            if display_name is not None:
+                line += f" | {Colors.CYAN}{display_name}{Colors.RESET}"
 
-        # Calculate bar width to fill remaining space
-        bar_width = self._calculate_bar_width(fixed_len)
-
-        filled = int(bar_width * progress)
-        empty = bar_width - filled
-        bar = f"{Colors.GREEN}{'█' * filled}{Colors.DIM}{'░' * empty}{Colors.RESET}"
-
-        # Build the line
-        line = f"{op_icon} {Colors.BOLD}{pct}{Colors.RESET} [{bar}] {items_str} | {size_str} | {Colors.DIM}{time_display}{Colors.RESET} | {Colors.CYAN}{display_name}{Colors.RESET}"
-
-        # Move to bottom, clear line, print
-        sys.stdout.write(Cursor.move_to_bottom())
-        sys.stdout.write("\033[2K")  # Clear entire line
-        sys.stdout.write(line)
-        sys.stdout.write(Cursor.move_to(rows - 1, 1))  # Move back up one line
-        sys.stdout.flush()
+            # Redraw in place on the current line
+            sys.stdout.write(Cursor.CLEAR_LINE)
+            sys.stdout.write(line)
+            sys.stdout.flush()
 
     def complete_item(self):
         """Mark one item as complete (thread-safe)."""
@@ -408,20 +390,12 @@ class ProgressBar:
         else:
             op_name = "Deleted"
             icon = "🗑️ "
-        summary = f"{icon} {op_name}: {self.completed_items} files ({format_size(self.completed_bytes)})"
+        summary = f"{icon} {op_name}: {self.completed_items} files ({format_size(self.completed_bytes)}) in {self._get_elapsed_time()}"
 
         if self.skipped_items > 0:
             summary += f" (Skipped: {self.skipped_items})"
 
-        if self.is_tty:
-            cols, rows = self._get_terminal_size()
-            # Clear the progress bar line
-            sys.stdout.write(Cursor.move_to_bottom())
-            sys.stdout.write("\033[2K")
-            sys.stdout.write(summary)
-            # Don't add extra newline - the shell prompt will handle spacing
-        else:
-            # In non-TTY mode, just print the summary
-            print(summary)
+        # Replace the progress bar line with the summary (no-op prefix outside a TTY)
+        print(f"{Cursor.CLEAR_LINE}{summary}")
 
         self._cleanup()

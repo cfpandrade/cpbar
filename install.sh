@@ -14,9 +14,9 @@ echo "🚀 Installing cpbar..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$LIB_DIR"
 
-# Clean up any existing installation to avoid conflicts
+# Clean up any existing local installation to avoid conflicts
 if [ -e "$INSTALL_DIR/$SCRIPT_NAME" ]; then
-    echo "   🧹 Removing previous installation..."
+    echo "   🧹 Removing previous local installation..."
     command rm -rf "$INSTALL_DIR/$SCRIPT_NAME"
 fi
 if [ -d "$INSTALL_DIR/cpbar" ]; then
@@ -24,6 +24,18 @@ if [ -d "$INSTALL_DIR/cpbar" ]; then
 fi
 if [ -d "$LIB_DIR/cpbar" ]; then
     command rm -rf "$LIB_DIR/cpbar"
+fi
+
+# Warn about older system-wide installations. This installer intentionally
+# installs to ~/.local and does not remove packages managed by apt/dpkg.
+SYSTEM_CPBAR="$(command -v cpbar 2>/dev/null || true)"
+if [ -n "$SYSTEM_CPBAR" ] && [ "$SYSTEM_CPBAR" != "$INSTALL_DIR/$SCRIPT_NAME" ]; then
+    echo "   ⚠️  Existing system cpbar detected at $SYSTEM_CPBAR"
+    if command -v dpkg >/dev/null 2>&1 && dpkg -S "$SYSTEM_CPBAR" >/dev/null 2>&1; then
+        echo "      Remove it with: sudo apt remove cpbar"
+    else
+        echo "      Remove it manually if it appears before $INSTALL_DIR in PATH."
+    fi
 fi
 
 # Copy the entire project to lib directory
@@ -62,9 +74,9 @@ echo "✅ Script installed to $INSTALL_DIR/$SCRIPT_NAME"
 ALIAS_BLOCK='
 # cpbar aliases - Enhanced cp/mv/rm with progress bars
 # Original commands (use these to bypass progress bars)
-alias cpo="cp"
-alias mvo="mv"
-alias rmo="rm"
+alias cpo="/bin/cp"
+alias mvo="/bin/mv"
+alias rmo="/bin/rm"
 # Replace cp/mv/rm with enhanced versions
 alias cp="cpbar cp"
 alias mv="cpbar mv"
@@ -179,6 +191,10 @@ echo "  cp file.txt /destination/          # Copy with progress bar"
 echo "  cp -r folder/ /destination/        # Copy folder with progress"
 echo "  cp -n file.txt /destination/       # Dry-run: preview without copying"
 echo "  cp -P large.iso /backup/           # Parallel copy (uses benchmark result)"
+echo "  mv file.txt /destination/          # Move with progress bar"
+echo "  mv -r folder/ /destination/        # Move folder with progress"
+echo "  mv -n folder/ /destination/        # Dry-run: preview without moving"
+echo "  mv -P large.iso /backup/           # Parallel move (uses benchmark result)"
 echo ""
 echo "  rm file.txt                        # Delete with confirmation + progress"
 echo "  rm -r folder/                      # Delete folder with progress"
