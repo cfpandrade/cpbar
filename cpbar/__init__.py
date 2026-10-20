@@ -7,7 +7,7 @@ beautiful progress bar to terminal file operations.
 Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 __author__ = "Carlos Andrade"
 __email__ = "carlos@perezandrade.com"
 
