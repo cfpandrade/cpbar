@@ -4,14 +4,18 @@ Tests for copy operations in cpbar.
 Author: Carlos Andrade <carlos@perezandrade.com>
 """
 
+import errno
+import functools
 import io
 import os
 import sys
+import threading
 import tempfile
 import shutil
 from pathlib import Path
 import pytest
 
+from cpbar import operations
 from cpbar.operations import get_all_files, copy_file_with_progress, copy_file_parallel, do_copy
 from cpbar.ui import ProgressBar
 
@@ -340,6 +344,80 @@ class TestCopyOperations:
             sys.stdout = old_stdout
 
         assert (self.dst_dir / "file.bin").read_bytes() == content
+
+    def _parallel_copy_with_failing_block(self, monkeypatch, error):
+        """Run a 4-block parallel copy where block 2 raises error."""
+        src_file = self.src_dir / "data.bin"
+        src_file.write_bytes(b'x' * 4096)
+        dst_file = self.dst_dir / "data.bin"
+
+        real_copy_block = operations.copy_block
+
+        def failing_copy_block(src, dst, offset, size, block_num, progress, lock):
+            if block_num == 2:
+                raise error
+            return real_copy_block(src, dst, offset, size, block_num, progress, lock)
+
+        monkeypatch.setattr("cpbar.operations.copy_block", failing_copy_block)
+        progress = ProgressBar(total_items=1, total_bytes=4096, operation="cp")
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            copy_file_parallel(str(src_file), str(dst_file), progress, num_workers=2, block_size=1024)
+        finally:
+            sys.stdout = old_stdout
+        return dst_file
+
+    def test_parallel_copy_block_error_removes_partial_file(self, monkeypatch):
+        """A failing block removes the partial file and the error names the block."""
+        error = OSError(errno.ENOSPC, "No space left on device")
+        with pytest.raises(OSError) as exc_info:
+            self._parallel_copy_with_failing_block(monkeypatch, error)
+
+        assert exc_info.value.errno == errno.ENOSPC
+        assert "block 3 of 4" in str(exc_info.value)
+        assert not (self.dst_dir / "data.bin").exists()
+
+    def test_parallel_copy_interrupt_removes_partial_file(self, monkeypatch):
+        """Ctrl+C during a parallel copy doesn't leave a full-size partial file behind."""
+        with pytest.raises(KeyboardInterrupt):
+            self._parallel_copy_with_failing_block(monkeypatch, KeyboardInterrupt())
+
+        assert not (self.dst_dir / "data.bin").exists()
+
+    def test_copy_block_short_read_is_an_error(self):
+        """A source that shrank mid-copy raises instead of leaving zeros in the destination."""
+        src_file = self.src_dir / "shrunk.bin"
+        src_file.write_bytes(b'x' * 100)
+        dst_file = self.dst_dir / "shrunk.bin"
+        dst_file.write_bytes(b'\0' * 200)
+
+        progress = ProgressBar(total_items=1, total_bytes=200, operation="cp")
+        with pytest.raises(OSError) as exc_info:
+            operations.copy_block(str(src_file), str(dst_file), 0, 200, 0, progress, threading.Lock())
+
+        assert exc_info.value.errno == errno.EIO
+
+    def test_do_copy_parallel_block_error_warns_and_continues(self, monkeypatch, capsys):
+        """do_copy reports a failed parallel copy as a warning and leaves no partial file."""
+        src_file = self.src_dir / "file.bin"
+        src_file.write_bytes(b'p' * 4096)
+        other_file = self.src_dir / "other.txt"
+        other_file.write_text("still copied")
+
+        monkeypatch.setattr("cpbar.operations.PARALLEL_THRESHOLD", 1024)
+        monkeypatch.setattr("cpbar.operations.copy_file_parallel",
+                            functools.partial(operations.copy_file_parallel, block_size=1024))
+
+        def failing_copy_block(*args):
+            raise PermissionError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr("cpbar.operations.copy_block", failing_copy_block)
+        do_copy([str(src_file), str(other_file)], str(self.dst_dir), recursive=False, parallel=2)
+
+        assert "block" in capsys.readouterr().err
+        assert not (self.dst_dir / "file.bin").exists()
+        assert (self.dst_dir / "other.txt").read_text() == "still copied"
 
     # --- Symlink tests ---
 

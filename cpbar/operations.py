@@ -7,6 +7,7 @@ Author: Carlos Andrade <carlos@perezandrade.com>
 
 import os
 import sys
+import errno
 import shutil
 import time
 import threading
@@ -149,6 +150,10 @@ def copy_block(src: str, dst: str, offset: int, size: int, block_num: int, progr
         fsrc.seek(offset)
         data = fsrc.read(size)
 
+        # The destination is preallocated, so a short read would leave zeros behind
+        if len(data) != size:
+            raise OSError(errno.EIO, f"Source changed during copy (read {len(data)} of {size} bytes)", src)
+
         with lock:
             with open(dst, 'r+b') as fdst:
                 fdst.seek(offset)
@@ -220,24 +225,35 @@ def copy_file_parallel(src: str, dst: str, progress: ProgressBar, num_workers: i
 
     # Copy blocks in parallel
     write_lock = threading.Lock()
+    executor = ThreadPoolExecutor(max_workers=num_workers)
     try:
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = []
-            for offset, size, num in blocks:
-                future = executor.submit(copy_block, src, str(dst_path), offset, size, num, progress, write_lock)
-                futures.append(future)
+        futures = {}
+        for offset, size, num in blocks:
+            future = executor.submit(copy_block, src, str(dst_path), offset, size, num, progress, write_lock)
+            futures[future] = (num, offset)
 
-            # Wait for all blocks to complete
-            for future in as_completed(futures):
-                future.result()  # This will raise any exceptions that occurred
-    except Exception as e:
-        # Cleanup: remove partially written destination file
+        # Wait for all blocks to complete
+        for future in as_completed(futures):
+            num, offset = futures[future]
+            try:
+                future.result()
+            except OSError as e:
+                where = f"block {num + 1} of {len(blocks)}, at {format_size(offset)}"
+                if e.errno is None:
+                    raise OSError(f"{e} ({where})") from e
+                raise OSError(e.errno, f"{e.strerror} ({where})", e.filename) from e
+    except BaseException:
+        # Any failure, Ctrl+C included: drop the pending blocks and remove the
+        # partial file, which already has its final size and would pass for a good copy
+        executor.shutdown(wait=True, cancel_futures=True)
         try:
-            if dst_path.exists():
-                dst_path.unlink()
-        except OSError:
-            pass  # Best effort cleanup
-        raise  # Re-raise the original exception
+            dst_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_err:
+            progress.log(f"{Colors.YELLOW}Warning: Could not remove partial file '{dst_path}': {cleanup_err}{Colors.RESET}", file=sys.stderr)
+        raise
+    executor.shutdown()
 
     # Preserve metadata
     shutil.copystat(src, dst_path)
